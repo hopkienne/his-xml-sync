@@ -1,29 +1,59 @@
 :root {
-  --color-bg: #f4f7f8;
+  /* Surfaces */
+  --color-bg: #eef2f4;
   --color-surface: #ffffff;
-  --color-surface-subtle: #fafcfc;
-  --color-border: #e1e7ea;
-  --color-border-strong: #c7d1d6;
-  --color-text-primary: #1e2a2e;
-  --color-text-secondary: #5c6b70;
-  --color-primary: #0e7c72;
-  --color-primary-hover: #0b665e;
-  --color-primary-active: #094f49;
+  --color-surface-subtle: #f7fafb;
+  --color-surface-muted: #edf2f4;
+
+  /* Borders */
+  --color-border: #dde4e8;
+  --color-border-strong: #c2ced4;
+
+  /* Text */
+  --color-text-primary: #15262b;
+  --color-text-secondary: #5a6b72;
+  --color-text-muted: #83949b;
+
+  /* Brand / teal */
+  --color-primary: #0d8a7f;
+  --color-primary-hover: #0b7269;
+  --color-primary-active: #095a53;
+  --color-primary-soft: #e6f6f4;
+  --color-primary-border: #b7e2dc;
+
+  /* Semantic */
   --color-blue: #2563eb;
-  --color-warning: #c9932e;
-  --color-error: #b3261e;
-  --color-error-bg: #fdecec;
-  --color-error-border: #f3c6c3;
-  --color-success: #1b7f4c;
-  --color-success-bg: #eaf7ef;
-  --color-success-border: #c3e8d1;
-  --color-focus-ring: #0e7c7233;
+  --color-blue-soft: #eff4ff;
+  --color-blue-border: #c7d7fe;
+  --color-warning: #b7791f;
+  --color-warning-soft: #fff8eb;
+  --color-warning-border: #f0d9a0;
+  --color-error: #c0352b;
+  --color-error-bg: #fdf0ef;
+  --color-error-border: #f0c4c0;
+  --color-success: #1a7f4b;
+  --color-success-bg: #e9f7ef;
+  --color-success-border: #b9e4cb;
+
+  --color-focus-ring: #0d8a7f33;
+
+  /* Sidebar — light utility rail */
+  --sidebar-width: 220px;
+  --sidebar-width-collapsed: 56px;
+  --sidebar-bg: #f4f5f6;
+  --sidebar-border: #e2e5e8;
+  --sidebar-text: #1c2529;
+  --sidebar-text-muted: #6b7780;
+  --sidebar-hover: #e9ecee;
+  --sidebar-active-bg: #ddeee9;
+  --sidebar-active-text: #0a5f56;
 
   --radius-panel: 8px;
   --radius-control: 6px;
+  --radius-pill: 999px;
 
-  --shadow-panel: 0 1px 2px rgba(20, 30, 32, 0.04), 0 4px 16px rgba(20, 30, 32, 0.05);
-  --shadow-elevated: 0 20px 48px rgba(20, 30, 32, 0.12);
+  --shadow-panel: 0 1px 2px rgba(15, 42, 46, 0.04), 0 4px 14px rgba(15, 42, 46, 0.05);
+  --shadow-elevated: 0 16px 40px rgba(15, 42, 46, 0.12);
 
   --space-1: 4px;
   --space-2: 8px;
@@ -35,7 +65,7 @@
   --space-8: 32px;
 
   --font-sans: Inter, -apple-system, "Segoe UI", system-ui, sans-serif;
-  --font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
 }
 
 * {
@@ -57,7 +87,8 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -84,8 +115,8 @@ button:disabled {
   gap: var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-control);
-  padding: 10px 16px;
-  font-size: 13.5px;
+  padding: 9px 14px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
@@ -99,7 +130,9 @@ button:disabled {
 }
 
 .ds-button:focus-visible,
-.ds-control:focus-visible {
+.ds-control:focus-visible,
+.field input:focus-visible,
+.field select:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--color-focus-ring);
 }
@@ -118,7 +151,7 @@ button:disabled {
 }
 
 .ds-button--primary:disabled {
-  background: #a9c9c5;
+  background: #97c4bf;
 }
 
 .ds-button--ghost {
@@ -129,15 +162,29 @@ button:disabled {
 
 .ds-button--ghost:hover:not(:disabled) {
   color: var(--color-text-primary);
-  background: var(--color-bg);
+  background: var(--color-surface-subtle);
+}
+
+.ds-button--danger {
+  color: var(--color-error);
+  background: var(--color-error-bg);
+  border-color: var(--color-error-border);
+}
+
+.ds-button--danger:hover:not(:disabled) {
+  background: #fbe3e1;
 }
 
 .ds-kicker {
   color: var(--color-primary);
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
+}
+
+.ds-muted {
+  color: var(--color-text-secondary);
 }
 
 .spin {

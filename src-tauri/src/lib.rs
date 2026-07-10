@@ -1,24 +1,50 @@
+mod app_logger;
 mod commands;
+mod db;
 mod his_api;
+mod kr800_process;
 mod license;
 pub mod license_core;
 mod settings;
 mod sync;
 mod tray;
 mod xml_parser;
+mod xml_track;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             tray::setup(app)?;
+
+            let app_data = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("app_data_dir: {e}"))?;
+            std::fs::create_dir_all(&app_data)
+                .map_err(|e| format!("create app_data_dir: {e}"))?;
+
+            app_logger::init(&app_data)?;
+
+            let database = db::init(app.handle())?;
+            app_logger::info(
+                "db",
+                &format!("SQLite ready: {}", database.path.display()),
+            );
+            app.manage(database);
+            app.manage(kr800_process::Kr800ProcessState::default());
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                app_logger::info("app", "Window close requested → hide to tray");
                 api.prevent_close();
                 if let Err(error) = window.hide() {
+                    app_logger::error("app", &format!("failed to hide window: {error}"));
                     eprintln!("failed to hide window: {error}");
                 }
             }
@@ -29,7 +55,17 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::preview_xml_file,
-            commands::run_sync_once
+            commands::run_sync_once,
+            commands::get_device_folder,
+            commands::set_tracking_folder_and_scan,
+            commands::rescan_tracking_folder,
+            commands::list_xml_files,
+            commands::get_log_info,
+            commands::export_app_logs,
+            commands::log_client_event,
+            commands::login_his,
+            commands::get_auth_status,
+            commands::process_kr800
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

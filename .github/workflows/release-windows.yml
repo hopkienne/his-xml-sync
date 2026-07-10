@@ -1,0 +1,90 @@
+# Build Windows NSIS installer and publish to GitHub Releases.
+# Official pattern: tauri-apps/tauri-action on windows-latest.
+#
+# Triggers:
+#   - Push tag v* (e.g. v0.1.0) → create draft release + attach setup.exe
+#   - workflow_dispatch → same (useful for test builds)
+#
+# Required repo secret:
+#   HIS_XML_LICENSE_PUBLIC_KEY — Ed25519 public key (base64url) embedded at compile time
+
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Require production license public key
+        shell: bash
+        env:
+          HIS_XML_LICENSE_PUBLIC_KEY: ${{ secrets.HIS_XML_LICENSE_PUBLIC_KEY }}
+        run: |
+          if [ -z "${HIS_XML_LICENSE_PUBLIC_KEY}" ]; then
+            echo "::error::Missing secret HIS_XML_LICENSE_PUBLIC_KEY."
+            echo "Add it under: Settings → Secrets and variables → Actions"
+            echo "Use the PUBLIC key from: cargo run --bin license_keygen -- keypair"
+            exit 1
+          fi
+          echo "HIS_XML_LICENSE_PUBLIC_KEY is set (${#HIS_XML_LICENSE_PUBLIC_KEY} chars)."
+
+      - name: Build Tauri app (Windows NSIS installer)
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HIS_XML_LICENSE_PUBLIC_KEY: ${{ secrets.HIS_XML_LICENSE_PUBLIC_KEY }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "HIS XML Sync v__VERSION__"
+          releaseBody: |
+            ## HIS XML Sync for Windows
+
+            Download **`HIS XML Sync_*_x64-setup.exe`**, run the installer, then activate with your license key.
+
+            ### Notes
+            - No need to install Node.js or Rust on the client machine.
+            - WebView2 is installed automatically if missing (requires internet on first run if not present).
+            - Production license public key is embedded at build time.
+          releaseDraft: true
+          prerelease: false
+          # Prefer NSIS setup.exe; matches tauri.conf.json bundle.targets
+          args: --bundles nsis
+
+      - name: Upload installer artifact (Actions tab)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: his-xml-sync-windows-nsis
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+          retention-days: 30

@@ -2,9 +2,7 @@ import { AlertTriangle, CheckCircle2, Clock3, XCircle } from "lucide-react";
 import type { ComponentType } from "react";
 import type { SyncStat } from "../types";
 
-type StatCardProps = SyncStat & {
-  description?: string;
-};
+type StatCardProps = SyncStat;
 
 const toneIcons: Record<SyncStat["tone"], ComponentType<{ size?: number; strokeWidth?: number }>> = {
   neutral: Clock3,
@@ -21,9 +19,9 @@ export function StatCard({ label, value, tone, description }: StatCardProps) {
       <div className="stat-card__icon" aria-hidden="true">
         <Icon size={18} strokeWidth={2} />
       </div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {description ? <small>{description}</small> : null}
+      <span title={label}>{label}</span>
+      <strong title={value}>{value}</strong>
+      {description ? <small title={description}>{description}</small> : null}
     </article>
   );
 }

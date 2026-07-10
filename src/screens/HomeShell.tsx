@@ -1,22 +1,40 @@
-import { useEffect, useState } from "react";
+import { KeyRound } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppSession } from "../App";
 import { Sidebar } from "../components/Sidebar";
-import { DashboardPanel } from "../features/dashboard/DashboardPanel";
-import { LicensePanel } from "../features/license/LicensePanel";
-import { LogsPanel } from "../features/logs/LogsPanel";
+import {
+  Kr800Panel,
+  loadStoredProcessRange,
+  saveStoredProcessRange,
+  toFilterEndDateTime,
+  toHisApiDateTime,
+  type Kr800ProcessPhase,
+} from "../features/kr800/Kr800Panel";
 import { HisSettingsPanel } from "../features/settings/HisSettingsPanel";
-import { SyncPanel } from "../features/sync/SyncPanel";
-import { XmlFolderPanel } from "../features/xml-folder/XmlFolderPanel";
-import { fallbackSettings, getSettings, runSyncOnce, saveSettings } from "../lib/appCommands";
+import {
+  exportAppLogs,
+  fallbackSettings,
+  getAuthStatus,
+  getDeviceFolder,
+  getLogInfo,
+  getSettings,
+  listXmlFiles,
+  logClientEvent,
+  loginHis,
+  pickTrackingFolder,
+  processKr800,
+  rescanTrackingFolder,
+  saveSettings,
+  setTrackingFolderAndScan,
+} from "../lib/appCommands";
 import type {
+  AppLogInfo,
   AppSettings,
-  HomeMenuItem,
-  LogEntry,
-  LogStatus,
-  MenuItemKey,
-  SyncFileRow,
-  SyncStat,
-  SyncSummary,
+  HisAuthStatus,
+  SidebarNavItem,
+  SidebarNavKey,
+  TrackedXmlFile,
 } from "../types";
 
 type HomeShellProps = {
@@ -24,204 +42,408 @@ type HomeShellProps = {
   onLogout: () => void;
 };
 
-const menuItems: HomeMenuItem[] = [
-  { key: "dashboard", label: "Tổng quan", description: "Trạng thái đồng bộ và cảnh báo gần nhất" },
-  { key: "his-settings", label: "Cấu hình HIS", description: "API, tài khoản và cơ sở KCB" },
-  { key: "xml-folder", label: "Thư mục XML", description: "Nguồn file máy đo khúc xạ xuất ra" },
-  { key: "sync", label: "Đồng bộ", description: "Xử lý XML và gửi kết quả lên HIS" },
-  { key: "logs", label: "Nhật ký", description: "Lịch sử thành công, lỗi và file bị bỏ qua" },
-  { key: "license", label: "License", description: "Khách hàng và ngày hết hạn" },
-];
-
-const stats: SyncStat[] = [
-  { label: "File chờ xử lý", value: "12", tone: "neutral", description: "Trong thư mục XML" },
-  { label: "Đã gửi hôm nay", value: "8", tone: "good", description: "Ghi nhận HIS thành công" },
-  { label: "Cần kiểm tra", value: "3", tone: "warning", description: "Thiếu match người bệnh" },
-  { label: "Lỗi", value: "1", tone: "danger", description: "Gửi API thất bại" },
-];
-
-const syncRows: SyncFileRow[] = [
+const sidebarItems: SidebarNavItem[] = [
   {
-    id: "1",
-    fileName: "HCM2607070269_20260707_145000_TOPCON_KR-800_4780634.xml",
-    patientId: "HCM2607070269",
-    measuredAt: "07/07/2026 14:50",
-    status: "sent",
-    right: { sphere: "+1.75", cylinder: "-1.00", axis: "178" },
-    left: { sphere: "+0.75", cylinder: "-0.25", axis: "35" },
+    key: "kr-800",
+    label: "KR-800",
+    description: "Máy đo khúc xạ TOPCON KR-800 — theo dõi folder XML và trạng thái file",
+    section: "device",
   },
   {
-    id: "2",
-    fileName: "HCM2607070312_20260707_151205_TOPCON_KR-800.xml",
-    patientId: "HCM2607070312",
-    measuredAt: "07/07/2026 15:12",
-    status: "needs-review",
-    error: "Chưa tìm thấy người bệnh trong danh sách HIS",
-    right: { sphere: "-0.50", cylinder: "-0.75", axis: "92" },
-    left: { sphere: "-0.25", cylinder: "-0.50", axis: "88" },
-  },
-  {
-    id: "3",
-    fileName: "HCM2607070345_20260707_153030_TOPCON_KR-800.xml",
-    patientId: "HCM2607070345",
-    measuredAt: "07/07/2026 15:30",
-    status: "failed",
-    error: "API HIS trả lỗi 500",
-    right: { sphere: "+0.25", cylinder: "-0.25", axis: "12" },
-    left: { sphere: "+0.50", cylinder: "-0.25", axis: "16" },
-  },
-  {
-    id: "4",
-    fileName: "HCM2607070366_20260707_160100_TOPCON_KR-800.xml",
-    patientId: "HCM2607070366",
-    measuredAt: "07/07/2026 16:01",
-    status: "waiting",
-    right: { sphere: "+1.00", cylinder: "-0.50", axis: "60" },
-    left: { sphere: "+0.75", cylinder: "-0.75", axis: "102" },
-  },
-];
-
-const logEntries: LogEntry[] = [
-  {
-    id: "log-1",
-    time: "21:52",
-    status: "success",
-    message: "Đã gửi kết quả HCM2607070269",
-    detail: "Payload khúc xạ đã được HIS ghi nhận.",
-  },
-  {
-    id: "log-2",
-    time: "21:48",
-    status: "warning",
-    message: "Không match được người bệnh HCM2607070312",
-    detail: "Cần kiểm tra ngày vào viện hoặc trạng thái dịch vụ.",
-  },
-  {
-    id: "log-3",
-    time: "21:44",
-    status: "error",
-    message: "Gửi API thất bại",
-    detail: "Endpoint nb-kham-ck-mat trả lỗi 500.",
+    key: "settings",
+    label: "Cấu hình",
+    description: "API URL HIS, tài khoản, mật khẩu, đăng nhập HIS và xuất logs",
+    section: "system",
   },
 ];
 
 export function HomeShell({ session, onLogout }: HomeShellProps) {
-  const [activeMenu, setActiveMenu] = useState<MenuItemKey>("dashboard");
+  const [activeNav, setActiveNav] = useState<SidebarNavKey>("kr-800");
   const [settings, setSettings] = useState<AppSettings>(fallbackSettings);
   const [connectionLabel, setConnectionLabel] = useState("Chưa kiểm tra");
-  const [hisConnection, setHisConnection] = useState<"connected" | "idle">("idle");
-  const [logFilter, setLogFilter] = useState<LogStatus | "all">("all");
-  const [syncSummary, setSyncSummary] = useState<SyncSummary | undefined>();
-  const [isSyncing, setIsSyncing] = useState(false);
-  const currentMenu = menuItems.find((item) => item.key === activeMenu) ?? menuItems[0];
+  const [isSaving, setIsSaving] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const [trackingFolder, setTrackingFolder] = useState<string | null>(null);
+  const [xmlFiles, setXmlFiles] = useState<TrackedXmlFile[]>([]);
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const [folderStatus, setFolderStatus] = useState<string | null>(null);
+  const [processRange, setProcessRange] = useState(loadStoredProcessRange);
+
+  const [logInfo, setLogInfo] = useState<AppLogInfo | null>(null);
+  const [isExportingLogs, setIsExportingLogs] = useState(false);
+  const [logStatus, setLogStatus] = useState<string | null>(null);
+  const [logError, setLogError] = useState<string | null>(null);
+
+  const [hisAuth, setHisAuth] = useState<HisAuthStatus | null>(null);
+  const [hisAuthError, setHisAuthError] = useState<string | null>(null);
+  const [processPhase, setProcessPhase] = useState<Kr800ProcessPhase>("idle");
+  const authOperationInFlight = useRef(false);
+
+  const currentNav = useMemo(
+    () => sidebarItems.find((item) => item.key === activeNav) ?? sidebarItems[0],
+    [activeNav],
+  );
+
+  const isSettingsView = activeNav === "settings";
+  const facilityLabel = session.facilityName ?? session.customerName;
+  const isProcessing = processPhase === "running";
+  const isHisBusy = isProcessing || isTestingConnection || isSaving;
+
+  const refreshLogInfo = useCallback(async () => {
+    const info = await getLogInfo();
+    setLogInfo(info);
+  }, []);
+
+  const loadKr800Data = useCallback(async () => {
+    setIsLoadingFiles(true);
+    setFolderError(null);
+    try {
+      const [folderState, files] = await Promise.all([getDeviceFolder(), listXmlFiles()]);
+      setTrackingFolder(folderState.trackingFolder ?? null);
+      setXmlFiles(files);
+    } catch (error) {
+      const message = extractErrorMessage(error) || "Không tải được dữ liệu KR-800.";
+      setFolderError(message);
+      void logClientEvent("error", "kr800", message);
+    } finally {
+      setIsLoadingFiles(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
 
     getSettings().then((loadedSettings) => {
       if (!cancelled) {
-        setSettings(loadedSettings);
+        setSettings({ ...fallbackSettings, ...loadedSettings });
       }
     });
+
+    // Đồng bộ trạng thái token đã lưu (nếu có) khi vào Home.
+    getAuthStatus().then((status) => {
+      if (!cancelled && status) {
+        setHisAuth(status);
+        if (status.loggedIn) {
+          setConnectionLabel(
+            `Đã có access_token${status.username ? ` (${status.username})` : ""}`,
+          );
+        }
+      }
+    });
+
+    void logClientEvent("info", "ui", "HomeShell mounted");
 
     return () => {
       cancelled = true;
     };
   }, []);
 
-  async function handleSaveSettings() {
-    const savedSettings = await saveSettings(settings);
-    setSettings(savedSettings);
-    setConnectionLabel("Đã lưu cấu hình");
-  }
+  useEffect(() => {
+    const unlisten = listen<TrackedXmlFile>("kr800:file-progress", ({ payload }) => {
+      setXmlFiles((current) => {
+        const found = current.some((file) => file.id === payload.id);
+        if (!found) return [...current, payload];
+        return current.map((file) => (file.id === payload.id ? payload : file));
+      });
+    });
 
-  function handleTestConnection() {
-    setConnectionLabel("Kết nối HIS sẵn sàng");
-    setHisConnection("connected");
-  }
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
+  }, []);
 
-  async function handleRunSync() {
-    setIsSyncing(true);
-    const summary = await runSyncOnce();
-    setSyncSummary(summary);
-    setIsSyncing(false);
-  }
-
-  function renderPanel() {
-    switch (activeMenu) {
-      case "dashboard":
-        return (
-          <DashboardPanel
-            stats={stats}
-            settings={settings}
-            licenseExpiresAt={session.expiresAt}
-            hisConnection={hisConnection}
-          />
-        );
-      case "his-settings":
-        return (
-          <HisSettingsPanel
-            settings={settings}
-            onChange={setSettings}
-            onSave={handleSaveSettings}
-            onTestConnection={handleTestConnection}
-            connectionLabel={connectionLabel}
-          />
-        );
-      case "xml-folder":
-        return <XmlFolderPanel settings={settings} onChange={setSettings} />;
-      case "sync":
-        return (
-          <SyncPanel
-            rows={syncRows}
-            summary={syncSummary}
-            onRunSync={handleRunSync}
-            isSyncing={isSyncing}
-          />
-        );
-      case "logs":
-        return <LogsPanel entries={logEntries} filter={logFilter} onFilterChange={setLogFilter} />;
-      case "license":
-        return <LicensePanel session={session} onLogout={onLogout} />;
-      default:
-        return null;
+  useEffect(() => {
+    if (activeNav === "kr-800") {
+      void loadKr800Data();
     }
+    if (activeNav === "settings") {
+      void refreshLogInfo();
+    }
+  }, [activeNav, loadKr800Data, refreshLogInfo]);
+
+  async function handleSaveSettings() {
+    if (authOperationInFlight.current) return;
+    authOperationInFlight.current = true;
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      const savedSettings = await saveSettings(settings);
+      setSettings(savedSettings);
+      setConnectionLabel("Đã lưu cấu hình — đang đăng nhập HIS…");
+      void logClientEvent("info", "ui", "save_settings succeeded; calling login_his");
+
+      // Sau khi lưu TK/MK, login lại để lấy access_token mới.
+      try {
+        const status = await loginHis();
+        setHisAuth(status);
+        setHisAuthError(null);
+        setConnectionLabel(
+          status.loggedIn
+            ? `Đăng nhập HIS thành công${status.fullName ? `: ${status.fullName}` : ""}`
+            : "Lưu xong nhưng chưa có access_token",
+        );
+      } catch (loginError) {
+        const message = extractErrorMessage(loginError) || "Đăng nhập HIS thất bại.";
+        setHisAuthError(message);
+        setConnectionLabel(message);
+      }
+    } catch (error) {
+      const message = extractErrorMessage(error) || "Không lưu được cấu hình.";
+      setSaveError(message);
+      setConnectionLabel(message);
+      void logClientEvent("error", "ui", `save_settings failed: ${message}`);
+    } finally {
+      setIsSaving(false);
+      authOperationInFlight.current = false;
+    }
+  }
+
+  async function handleTestConnection() {
+    if (authOperationInFlight.current) return;
+    authOperationInFlight.current = true;
+    setIsTestingConnection(true);
+    setSaveError(null);
+    try {
+      // Nếu form có thay đổi chưa lưu — dùng credentials đã lưu trong SQLite.
+      const status = await loginHis();
+      setHisAuth(status);
+      setHisAuthError(null);
+      const label = status.loggedIn
+        ? `Kết nối HIS OK — token lưu cho ${status.username ?? "user"}`
+        : "Login xong nhưng không có token";
+      setConnectionLabel(label);
+      void logClientEvent("info", "ui", label);
+    } catch (error) {
+      const message = extractErrorMessage(error) || "Kiểm tra kết nối thất bại.";
+      setHisAuthError(message);
+      setConnectionLabel(message);
+      void logClientEvent("error", "ui", `test_connection failed: ${message}`);
+    } finally {
+      setIsTestingConnection(false);
+      authOperationInFlight.current = false;
+    }
+  }
+
+  async function handleExportLogs() {
+    setIsExportingLogs(true);
+    setLogError(null);
+    setLogStatus(null);
+    try {
+      const result = await exportAppLogs();
+      if (!result) {
+        setLogStatus("Đã hủy xuất logs.");
+        void logClientEvent("info", "ui", "export_app_logs cancelled by user");
+        return;
+      }
+      setLogStatus(
+        `Đã xuất ${formatBytes(result.bytesWritten)} từ ${result.sourceFiles} file nguồn → ${result.targetPath}`,
+      );
+      await refreshLogInfo();
+    } catch (error) {
+      const message = extractErrorMessage(error) || "Không xuất được logs.";
+      setLogError(message);
+      void logClientEvent("error", "ui", `export_app_logs failed: ${message}`);
+    } finally {
+      setIsExportingLogs(false);
+    }
+  }
+
+  async function handlePickFolder() {
+    setFolderError(null);
+    setFolderStatus(null);
+    const folder = await pickTrackingFolder();
+    if (!folder) {
+      setFolderStatus("Đã hủy chọn thư mục.");
+      void logClientEvent("info", "ui", "pick_tracking_folder cancelled");
+      return;
+    }
+
+    setIsScanning(true);
+    try {
+      const result = await setTrackingFolderAndScan(folder);
+      setTrackingFolder(result.trackingFolder);
+      setXmlFiles(result.files);
+      setFolderStatus(
+        `Đã quét ${result.scannedCount} file XML, thêm mới ${result.insertedCount} bản ghi.`,
+      );
+    } catch (error) {
+      const message = extractErrorMessage(error) || "Không quét được thư mục.";
+      setFolderError(message);
+      void logClientEvent("error", "ui", `set_tracking_folder_and_scan failed: ${message}`);
+    } finally {
+      setIsScanning(false);
+    }
+  }
+
+  async function handleRescan() {
+    setFolderError(null);
+    setFolderStatus(null);
+    setIsScanning(true);
+    try {
+      const result = await rescanTrackingFolder();
+      setTrackingFolder(result.trackingFolder);
+      setXmlFiles(result.files);
+      setFolderStatus(
+        `Quét lại: ${result.scannedCount} file XML, thêm mới ${result.insertedCount} bản ghi.`,
+      );
+    } catch (error) {
+      const message = extractErrorMessage(error) || "Không quét lại được thư mục.";
+      setFolderError(message);
+      void logClientEvent("error", "ui", `rescan_tracking_folder failed: ${message}`);
+    } finally {
+      setIsScanning(false);
+    }
+  }
+
+  async function handleProcess() {
+    if (authOperationInFlight.current) return;
+    authOperationInFlight.current = true;
+
+    setProcessPhase("running");
+    setHisAuthError(null);
+    setFolderStatus("Đang tải danh sách người bệnh và xử lý tối đa 5 file cùng lúc…");
+    setFolderError(null);
+    void logClientEvent("info", "kr800", "process pipeline started");
+
+    try {
+      const result = await processKr800(
+        toHisApiDateTime(processRange.from),
+        toFilterEndDateTime(processRange.to),
+      );
+      setXmlFiles(result.files);
+      setHisAuthError(null);
+      setProcessPhase("success");
+      setFolderStatus(
+        result.total === 0
+          ? "Không có file ở trạng thái Chờ xử lý trong khoảng thời gian đã chọn."
+          : `Đã xử lý ${result.processed}/${result.total} file; bỏ qua trùng ${result.skipped}; lỗi ${result.failed}.`,
+      );
+      const status = await getAuthStatus();
+      setHisAuth(status);
+      setConnectionLabel(status?.hasAccessToken ? "HIS: đã có access_token" : "HIS: chưa login");
+      void logClientEvent("info", "kr800", "process pipeline completed");
+    } catch (error) {
+      const message = extractErrorMessage(error) || "Không thực hiện được luồng xử lý KR-800.";
+      setFolderError(message);
+      setProcessPhase("error");
+      void logClientEvent("error", "kr800", `process pipeline failed: ${message}`);
+    } finally {
+      authOperationInFlight.current = false;
+    }
+  }
+
+  function handleProcessRangeChange(next: typeof processRange) {
+    saveStoredProcessRange(next);
+    setProcessRange(next);
   }
 
   return (
     <main className="app-shell">
-      <Sidebar items={menuItems} activeKey={activeMenu} onSelect={setActiveMenu} />
+      <Sidebar
+        items={sidebarItems}
+        activeKey={activeNav}
+        onSelect={setActiveNav}
+        facilityLabel={facilityLabel}
+      />
 
       <section className="content-area">
         <header className="topbar">
-          <div>
-            <h1>{currentMenu.label}</h1>
-            <p>{currentMenu.description}</p>
+          <div className="topbar__titles">
+            <h1>{currentNav.label}</h1>
+            <p>{currentNav.description}</p>
           </div>
           <div className="session-pill">
+            <span
+              className={`session-pill__dot${
+                isHisBusy ? " is-busy" : hisAuth?.loggedIn ? "" : " is-warn"
+              }`}
+              aria-hidden="true"
+            />
             <div className="session-pill__meta">
-              <span>{session.facilityName ?? session.customerName ?? "Chưa gán tên"}</span>
-              <strong>Hết hạn: {formatDate(session.expiresAt)}</strong>
+              <span title={facilityLabel}>{facilityLabel ?? "Chưa gán tên"}</span>
+              <strong>
+                {isHisBusy
+                  ? "Đang đăng nhập HIS…"
+                  : hisAuth?.loggedIn
+                    ? `HIS: ${hisAuth.fullName || hisAuth.username || "đã login"}`
+                    : hisAuthError
+                      ? "HIS: lỗi login"
+                      : "HIS: chưa login"}
+              </strong>
             </div>
-            <button type="button" className="ds-button ds-button--ghost" onClick={onLogout}>
+            <button
+              type="button"
+              className="ds-button ds-button--ghost"
+              onClick={onLogout}
+              disabled={isHisBusy}
+            >
+              <KeyRound size={14} strokeWidth={2} aria-hidden="true" />
               Đổi key
             </button>
           </div>
         </header>
 
-        <section className="work-surface">{renderPanel()}</section>
+        <section className="work-surface">
+          {isSettingsView ? (
+            <HisSettingsPanel
+              settings={settings}
+              onChange={(next) => {
+                setSaveError(null);
+                setSettings(next);
+              }}
+              onSave={handleSaveSettings}
+              onTestConnection={handleTestConnection}
+              onExportLogs={handleExportLogs}
+              connectionLabel={connectionLabel}
+              isSaving={isSaving}
+              isTestingConnection={isTestingConnection}
+              isProcessing={isProcessing}
+              isExportingLogs={isExportingLogs}
+              saveError={saveError}
+              logInfo={logInfo}
+              logStatus={logStatus}
+              logError={logError}
+              hisAuth={hisAuth}
+              hisAuthError={hisAuthError}
+            />
+          ) : (
+            <Kr800Panel
+              trackingFolder={trackingFolder}
+              files={xmlFiles}
+              isLoading={isLoadingFiles}
+              isScanning={isScanning}
+              error={folderError}
+              statusMessage={folderStatus}
+              onPickFolder={handlePickFolder}
+              onRescan={handleRescan}
+              processRange={processRange}
+              onProcessRangeChange={handleProcessRangeChange}
+              processPhase={processPhase}
+              isProcessBlocked={isSaving || isTestingConnection}
+              onProcess={() => void handleProcess()}
+            />
+          )}
+        </section>
       </section>
     </main>
   );
 }
 
-function formatDate(value?: string) {
-  if (!value) return "N/A";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString("vi-VN", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function extractErrorMessage(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return "";
 }

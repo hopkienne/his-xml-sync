@@ -1,48 +1,72 @@
-import { Folder, RefreshCw } from "lucide-react";
-import type { AppSettings } from "../../types";
+import { Folder, Info, RefreshCw } from "lucide-react";
+import type { XmlFolderState } from "../../types";
 
 type XmlFolderPanelProps = {
-  settings: AppSettings;
-  onChange: (settings: AppSettings) => void;
+  state: XmlFolderState;
+  onChange: (state: XmlFolderState) => void;
+  xmlFileCount: number;
+  latestXmlFile?: string;
+  onPickFolder: () => void;
+  onRefresh?: () => void;
 };
 
-export function XmlFolderPanel({ settings, onChange }: XmlFolderPanelProps) {
+export function XmlFolderPanel({
+  state,
+  onChange,
+  xmlFileCount,
+  latestXmlFile,
+  onPickFolder,
+  onRefresh,
+}: XmlFolderPanelProps) {
   return (
     <section className="folder-layout">
       <div className="folder-summary ds-card">
         <div className="panel-heading">
           <div>
             <h2>Thư mục XML</h2>
-            <p>Nơi máy TOPCON KR-800 xuất file kết quả đo khúc xạ.</p>
+            <p className="panel-lead">
+              Nơi máy TOPCON KR-800 xuất file kết quả đo khúc xạ. Ứng dụng quét và đồng bộ từ đường
+              dẫn này.
+            </p>
           </div>
-          <button type="button" className="ds-button ds-button--ghost">
-            <Folder size={16} strokeWidth={2} aria-hidden="true" />
-            Chọn thư mục
-          </button>
+          <div className="panel-actions">
+            {onRefresh ? (
+              <button type="button" className="ds-button ds-button--ghost" onClick={onRefresh}>
+                <RefreshCw size={16} strokeWidth={2} aria-hidden="true" />
+                Làm mới
+              </button>
+            ) : null}
+            <button type="button" className="ds-button ds-button--primary" onClick={onPickFolder}>
+              <Folder size={16} strokeWidth={2} aria-hidden="true" />
+              Chọn thư mục
+            </button>
+          </div>
         </div>
 
         <div className="path-box">
           <span>Đường dẫn hiện tại</span>
-          <strong>{settings.xmlFolder || "Chưa chọn thư mục"}</strong>
+          <strong title={state.xmlFolder || undefined}>
+            {state.xmlFolder || "Chưa chọn thư mục"}
+          </strong>
         </div>
 
         <div className="folder-metrics">
           <div>
             <span>File XML tìm thấy</span>
-            <strong>12</strong>
+            <strong>{xmlFileCount}</strong>
           </div>
           <div>
             <span>File mới nhất</span>
-            <strong>HCM2607070269_20260707_145000_TOPCON_KR-800_4780634.xml</strong>
+            <strong title={latestXmlFile}>{latestXmlFile || "—"}</strong>
           </div>
         </div>
 
         <label className="toggle-row">
           <input
             type="checkbox"
-            checked={settings.autoSyncEnabled}
+            checked={state.autoSyncEnabled}
             onChange={(event) =>
-              onChange({ ...settings, autoSyncEnabled: event.currentTarget.checked })
+              onChange({ ...state, autoSyncEnabled: event.currentTarget.checked })
             }
           />
           <span>Tự động đồng bộ khi có file XML mới</span>
@@ -50,9 +74,15 @@ export function XmlFolderPanel({ settings, onChange }: XmlFolderPanelProps) {
       </div>
 
       <aside className="side-note">
-        <RefreshCw size={18} strokeWidth={2} aria-hidden="true" />
-        <strong>Folder picker</strong>
-        <p>Vị trí nút chọn thư mục đã sẵn sàng; bước sau chỉ cần nối plugin dialog của Tauri.</p>
+        <div className="side-note__icon" aria-hidden="true">
+          <Info size={16} strokeWidth={2} />
+        </div>
+        <span>Folder picker</span>
+        <strong>Chưa lưu SQLite</strong>
+        <p>
+          Thư mục XML sẽ được persist ở bước sau. Hiện chỉ giữ local UI; cấu hình kết nối API đã lưu
+          bảng <code>app_config</code>.
+        </p>
       </aside>
     </section>
   );

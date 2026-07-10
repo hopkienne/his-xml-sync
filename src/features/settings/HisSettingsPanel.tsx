@@ -1,12 +1,23 @@
-import { PlugZap, Save } from "lucide-react";
-import type { AppSettings } from "../../types";
+import { Download, Info, Loader2, PlugZap, Save } from "lucide-react";
+import type { AppLogInfo, AppSettings, HisAuthStatus } from "../../types";
 
 type HisSettingsPanelProps = {
   settings: AppSettings;
   onChange: (settings: AppSettings) => void;
   onSave: () => void;
   onTestConnection: () => void;
+  onExportLogs: () => void;
   connectionLabel: string;
+  isSaving?: boolean;
+  isTestingConnection?: boolean;
+  isProcessing?: boolean;
+  isExportingLogs?: boolean;
+  saveError?: string | null;
+  logInfo?: AppLogInfo | null;
+  logStatus?: string | null;
+  logError?: string | null;
+  hisAuth?: HisAuthStatus | null;
+  hisAuthError?: string | null;
 };
 
 export function HisSettingsPanel({
@@ -14,73 +25,277 @@ export function HisSettingsPanel({
   onChange,
   onSave,
   onTestConnection,
+  onExportLogs,
   connectionLabel,
+  isSaving = false,
+  isTestingConnection = false,
+  isProcessing = false,
+  isExportingLogs = false,
+  saveError = null,
+  logInfo = null,
+  logStatus = null,
+  logError = null,
+  hisAuth = null,
+  hisAuthError = null,
 }: HisSettingsPanelProps) {
+  const hasStoredPassword = Boolean(settings.updatedAt) && settings.password.length > 0;
+
   return (
     <section className="settings-layout">
-      <div className="form-panel ds-card">
-        <div className="panel-heading">
-          <div>
-            <h2>Cấu hình kết nối HIS</h2>
-            <p>Thông tin này sẽ được backend dùng khi login, lấy danh sách người bệnh và gửi kết quả.</p>
+      <div className="settings-main-stack">
+        <div className="form-panel ds-card">
+          <div className="panel-heading">
+            <div>
+              <h2>Cấu hình kết nối</h2>
+
+            </div>
+          </div>
+
+          <div className="form-grid">
+            <label className="field form-grid--full">
+              <span>API URL HIS (base)</span>
+              <input
+                value={settings.hisApiUrl}
+                placeholder="https://api-hisvn.vietngagroup.vn"
+                onChange={(event) => onChange({ ...settings, hisApiUrl: event.target.value })}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+
+            <label className="field">
+              <span>Tài khoản (taiKhoan)</span>
+              <input
+                value={settings.username}
+                placeholder="Tài khoản đăng nhập API"
+                onChange={(event) => onChange({ ...settings, username: event.target.value })}
+                autoComplete="username"
+              />
+            </label>
+
+            <label className="field">
+              <span>Mật khẩu (matKhau)</span>
+              <input
+                type="password"
+                value={settings.password}
+                placeholder={
+                  hasStoredPassword ? "Đã lưu — để trống nếu không đổi" : "Mật khẩu đăng nhập API"
+                }
+                onChange={(event) => onChange({ ...settings, password: event.target.value })}
+                autoComplete="current-password"
+              />
+            </label>
+
+            <label className="field">
+              <span>
+                Cơ sở khám bệnh <small className="field-hint">ID</small>
+              </span>
+              <input
+                type="number"
+                step={1}
+                value={settings.dsCoSoKcbId}
+                aria-label="ID cơ sở khám bệnh"
+                title="ID cơ sở khám bệnh"
+                onChange={(event) => {
+                  const value = event.currentTarget.valueAsNumber;
+                  if (Number.isInteger(value)) {
+                    onChange({ ...settings, dsCoSoKcbId: value });
+                  }
+                }}
+              />
+            </label>
+
+            <label className="field-checkbox form-grid--full">
+              <input
+                type="checkbox"
+                checked={settings.copyRefractionToNewGlasses}
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    copyRefractionToNewGlasses: event.currentTarget.checked,
+                  })
+                }
+              />
+              <span>
+                Sao chép kết quả khúc xạ sang kính mới
+                <small>Mặc định tắt</small>
+              </span>
+            </label>
+          </div>
+
+          {saveError ? (
+            <p className="settings-error" role="alert">
+              {saveError}
+            </p>
+          ) : null}
+
+          <div className="button-row">
+            <button
+              type="button"
+              className="ds-button ds-button--ghost"
+              onClick={onTestConnection}
+              disabled={isTestingConnection || isSaving || isProcessing}
+            >
+              {isTestingConnection ? (
+                <Loader2 size={16} strokeWidth={2} className="spin" aria-hidden="true" />
+              ) : (
+                <PlugZap size={16} strokeWidth={2} aria-hidden="true" />
+              )}
+              {isTestingConnection ? "Đang login…" : "Kiểm tra / Login HIS"}
+            </button>
+            <button
+              type="button"
+              className="ds-button ds-button--primary"
+              onClick={onSave}
+              disabled={isSaving || isTestingConnection || isProcessing}
+            >
+              {isSaving ? (
+                <Loader2 size={16} strokeWidth={2} className="spin" aria-hidden="true" />
+              ) : (
+                <Save size={16} strokeWidth={2} aria-hidden="true" />
+              )}
+              {isSaving ? "Đang lưu…" : "Lưu & Login"}
+            </button>
           </div>
         </div>
 
-        <div className="form-grid">
-          <label className="field">
-            <span>Base URL</span>
-            <input
-              value={settings.apiBaseUrl}
-              onChange={(event) => onChange({ ...settings, apiBaseUrl: event.target.value })}
-            />
-          </label>
+        <div className="form-panel ds-card">
+          <div className="panel-heading">
+            <div>
+              <h2>Phiên đăng nhập HIS</h2>
+              <p className="panel-lead">
+                Token lưu bảng <code>auth_session</code> (không hiển thị full access_token trên UI).
+              </p>
+            </div>
+          </div>
 
-          <label className="field">
-            <span>Tài khoản</span>
-            <input
-              value={settings.username}
-              placeholder="Nhập tài khoản HIS"
-              onChange={(event) => onChange({ ...settings, username: event.target.value })}
-            />
-          </label>
+          <div className="log-meta-grid">
+            <div>
+              <span>Trạng thái</span>
+              <strong>
+                {hisAuth?.loggedIn
+                  ? "Đã login"
+                  : hisAuthError
+                    ? "Lỗi"
+                    : "Chưa login"}
+              </strong>
+            </div>
+            <div>
+              <span>User</span>
+              <strong title={hisAuth?.fullName || hisAuth?.username || undefined}>
+                {hisAuth?.fullName || hisAuth?.username || "—"}
+              </strong>
+            </div>
+            <div>
+              <span>coSoKcbId</span>
+              <strong>{hisAuth?.coSoKcbId ?? "—"}</strong>
+            </div>
+            <div>
+              <span>Hết hạn token</span>
+              <strong title={hisAuth?.expiration || undefined}>
+                {hisAuth?.expiration || "—"}
+              </strong>
+            </div>
+            <div>
+              <span>Token type</span>
+              <strong>{hisAuth?.tokenType || "—"}</strong>
+            </div>
+            <div>
+              <span>Có access_token</span>
+              <strong>{hisAuth?.hasAccessToken ? "Có" : "Không"}</strong>
+            </div>
+          </div>
 
-          <label className="field">
-            <span>Mật khẩu / token policy</span>
-            <input type="password" placeholder="Sẽ lưu bằng secure storage ở bước backend" />
-          </label>
-
-          <label className="field">
-            <span>coSoKcbId</span>
-            <input
-              type="number"
-              value={settings.facilityId ?? ""}
-              onChange={(event) =>
-                onChange({
-                  ...settings,
-                  facilityId: event.target.value ? Number(event.target.value) : null,
-                })
-              }
-            />
-          </label>
+          {hisAuthError ? (
+            <p className="settings-error" role="alert">
+              {hisAuthError}
+            </p>
+          ) : null}
         </div>
 
-        <div className="button-row">
-          <button type="button" className="ds-button ds-button--ghost" onClick={onTestConnection}>
-            <PlugZap size={16} strokeWidth={2} aria-hidden="true" />
-            Kiểm tra kết nối
-          </button>
-          <button type="button" className="ds-button ds-button--primary" onClick={onSave}>
-            <Save size={16} strokeWidth={2} aria-hidden="true" />
-            Lưu cấu hình
-          </button>
+        <div className="form-panel ds-card">
+          <div className="panel-heading">
+            <div>
+              <h2>Nhật ký ứng dụng</h2>
+              <p className="panel-lead">
+                Request/response login (không gồm mật khẩu/token đầy đủ) được ghi log để debug trên
+                mạng nội bộ.
+              </p>
+            </div>
+            <div className="panel-actions">
+              <button
+                type="button"
+                className="ds-button ds-button--primary"
+                onClick={onExportLogs}
+                disabled={isExportingLogs}
+              >
+                <Download size={16} strokeWidth={2} aria-hidden="true" />
+                {isExportingLogs ? "Đang xuất…" : "Xuất logs"}
+              </button>
+            </div>
+          </div>
+
+          <div className="log-meta-grid">
+            <div>
+              <span>File log</span>
+              <strong title={logInfo?.logPath}>{logInfo?.logPath || "—"}</strong>
+            </div>
+            <div>
+              <span>Kích thước</span>
+              <strong>{formatBytes(logInfo?.sizeBytes)}</strong>
+            </div>
+            <div>
+              <span>Backup rotate</span>
+              <strong>{logInfo?.hasBackup ? "Có (app.log.1)" : "Không"}</strong>
+            </div>
+          </div>
+
+          {logStatus ? <p className="kr800-message">{logStatus}</p> : null}
+          {logError ? (
+            <p className="settings-error" role="alert">
+              {logError}
+            </p>
+          ) : null}
         </div>
       </div>
 
       <aside className="side-note">
+        <div className="side-note__icon" aria-hidden="true">
+          <Info size={16} strokeWidth={2} />
+        </div>
         <span>Trạng thái</span>
         <strong>{connectionLabel}</strong>
-        <p>Form đã đặt đúng contract để nối `get_settings` và `save_settings` từ Tauri.</p>
+        {settings.updatedAt ? (
+          <p>
+            Lần lưu cấu hình: <code>{formatUpdatedAt(settings.updatedAt)}</code>
+          </p>
+        ) : (
+          <p>Chưa lưu cấu hình HIS trong SQLite.</p>
+        )}
+        <p>
+          Endpoint: <code>{"{base}"}/api/his/v1/auth/login</code>
+        </p>
       </aside>
     </section>
   );
+}
+
+function formatUpdatedAt(value: string) {
+  const normalized = value.includes("T") ? value : value.replace(" ", "T") + "Z";
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatBytes(bytes?: number) {
+  if (bytes == null || Number.isNaN(bytes)) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }

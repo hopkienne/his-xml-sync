@@ -1,56 +1,103 @@
-import { DatabaseZap, FolderCheck, KeyRound, Wifi } from "lucide-react";
+import {
+  AlertCircle,
+  DatabaseZap,
+  FolderOpen,
+  KeyRound,
+  RefreshCw,
+  Settings2,
+  UploadCloud,
+  Wifi,
+} from "lucide-react";
+import type { ComponentType } from "react";
 import { StatCard } from "../../components/StatCard";
-import type { AppSettings, SyncStat } from "../../types";
+import type {
+  AppSettings,
+  ConnectionState,
+  SyncStat,
+  WorkspaceTabKey,
+  XmlFolderState,
+} from "../../types";
 
 type DashboardPanelProps = {
   stats: SyncStat[];
   settings: AppSettings;
+  xmlFolder: XmlFolderState;
   licenseExpiresAt?: string;
-  hisConnection: "connected" | "idle";
+  hisConnection: ConnectionState;
+  lastSyncAt?: string;
+  onNavigateTab: (key: WorkspaceTabKey) => void;
+  onOpenSettings: () => void;
+  onRunSync: () => void;
+  isSyncing: boolean;
 };
 
 export function DashboardPanel({
   stats,
   settings,
+  xmlFolder,
   licenseExpiresAt,
   hisConnection,
+  lastSyncAt,
+  onNavigateTab,
+  onOpenSettings,
+  onRunSync,
+  isSyncing,
 }: DashboardPanelProps) {
-  const statusItems = [
+  const configReady =
+    Boolean(settings.hisApiUrl?.trim()) &&
+    Boolean(settings.username?.trim());
+
+  const statusItems: Array<{
+    icon: ComponentType<{ size?: number; strokeWidth?: number }>;
+    label: string;
+    value: string;
+    tone: "neutral" | "good" | "warning" | "danger";
+  }> = [
     {
       icon: KeyRound,
       label: "License",
       value: licenseExpiresAt ? `Còn hạn đến ${formatDate(licenseExpiresAt)}` : "Chưa có hạn dùng",
-      tone: "good",
+      tone: licenseExpiresAt ? "good" : "warning",
     },
     {
       icon: Wifi,
       label: "Kết nối HIS",
-      value: hisConnection === "connected" ? "Sẵn sàng" : "Chưa kiểm tra",
-      tone: hisConnection === "connected" ? "good" : "idle",
+      value: configReady
+        ? connectionLabel(hisConnection)
+        : "Chưa cấu hình API",
+      tone: configReady
+        ? hisConnection === "connected"
+          ? "good"
+          : hisConnection === "error"
+            ? "danger"
+            : hisConnection === "warning"
+              ? "warning"
+              : "neutral"
+        : "warning",
     },
     {
-      icon: FolderCheck,
+      icon: FolderOpen,
       label: "Thư mục XML",
-      value: settings.xmlFolder || "Chưa chọn thư mục",
-      tone: settings.xmlFolder ? "good" : "idle",
+      value: xmlFolder.xmlFolder || "Chưa chọn thư mục",
+      tone: xmlFolder.xmlFolder ? "good" : "warning",
     },
     {
       icon: DatabaseZap,
       label: "Lần đồng bộ gần nhất",
-      value: "08/07/2026 21:52",
-      tone: "good",
+      value: lastSyncAt || "Chưa đồng bộ",
+      tone: lastSyncAt ? "good" : "neutral",
     },
   ];
 
   return (
     <div className="panel-stack">
-      <section className="dashboard-grid">
+      <section className="dashboard-grid" aria-label="Thống kê đồng bộ">
         {stats.map((stat) => (
           <StatCard key={stat.label} {...stat} />
         ))}
       </section>
 
-      <section className="panel-grid panel-grid--status">
+      <section className="status-board" aria-label="Trạng thái hệ thống">
         {statusItems.map((item) => {
           const Icon = item.icon;
           return (
@@ -58,16 +105,70 @@ export function DashboardPanel({
               <div className={`status-tile__icon ${item.tone}`}>
                 <Icon size={18} strokeWidth={2} aria-hidden="true" />
               </div>
-              <div>
+              <div className="status-tile__body">
                 <span>{item.label}</span>
-                <strong>{item.value}</strong>
+                <strong title={item.value}>{item.value}</strong>
               </div>
             </article>
           );
         })}
       </section>
+
+      <section className="quick-actions" aria-label="Thao tác nhanh">
+        <div className="quick-actions__label">Thao tác nhanh</div>
+        <button
+          type="button"
+          className="ds-button ds-button--primary"
+          onClick={onRunSync}
+          disabled={isSyncing}
+        >
+          {isSyncing ? (
+            <RefreshCw size={16} strokeWidth={2} className="spin" aria-hidden="true" />
+          ) : (
+            <UploadCloud size={16} strokeWidth={2} aria-hidden="true" />
+          )}
+          Đồng bộ ngay
+        </button>
+        <button
+          type="button"
+          className="ds-button ds-button--ghost"
+          onClick={onOpenSettings}
+        >
+          <Settings2 size={16} strokeWidth={2} aria-hidden="true" />
+          Cấu hình
+        </button>
+        <button
+          type="button"
+          className="ds-button ds-button--ghost"
+          onClick={() => onNavigateTab("xml-folder")}
+        >
+          <FolderOpen size={16} strokeWidth={2} aria-hidden="true" />
+          Thư mục XML
+        </button>
+        <button
+          type="button"
+          className="ds-button ds-button--ghost"
+          onClick={() => onNavigateTab("logs")}
+        >
+          <AlertCircle size={16} strokeWidth={2} aria-hidden="true" />
+          Xem nhật ký
+        </button>
+      </section>
     </div>
   );
+}
+
+function connectionLabel(state: ConnectionState) {
+  switch (state) {
+    case "connected":
+      return "Sẵn sàng";
+    case "warning":
+      return "Cảnh báo";
+    case "error":
+      return "Lỗi kết nối";
+    default:
+      return "Chưa kiểm tra";
+  }
 }
 
 function formatDate(value: string) {

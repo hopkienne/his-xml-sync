@@ -3,6 +3,8 @@ import type { SyncFileRow, SyncSummary } from "../../types";
 
 type SyncPanelProps = {
   rows: SyncFileRow[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
   summary?: SyncSummary;
   onRunSync: () => void;
   isSyncing: boolean;
@@ -15,8 +17,15 @@ const statusCopy: Record<SyncFileRow["status"], string> = {
   failed: "Lỗi",
 };
 
-export function SyncPanel({ rows, summary, onRunSync, isSyncing }: SyncPanelProps) {
-  const selected = rows[0];
+export function SyncPanel({
+  rows,
+  selectedId,
+  onSelect,
+  summary,
+  onRunSync,
+  isSyncing,
+}: SyncPanelProps) {
+  const selected = rows.find((row) => row.id === selectedId) ?? rows[0];
 
   return (
     <section className="sync-layout">
@@ -24,22 +33,44 @@ export function SyncPanel({ rows, summary, onRunSync, isSyncing }: SyncPanelProp
         <div className="panel-heading">
           <div>
             <h2>Danh sách file XML</h2>
-            <p>Kiểm tra patient ID, thời gian đo và trạng thái gửi HIS.</p>
+            <p className="panel-lead">
+              Kiểm tra patient ID, thời gian đo và trạng thái gửi HIS. Chọn một dòng để xem preview
+              mắt phải / mắt trái.
+            </p>
           </div>
-          <button
-            type="button"
-            className="ds-button ds-button--primary"
-            onClick={onRunSync}
-            disabled={isSyncing}
-          >
-            {isSyncing ? (
-              <RefreshCw size={16} strokeWidth={2} className="spin" aria-hidden="true" />
-            ) : (
-              <UploadCloud size={16} strokeWidth={2} aria-hidden="true" />
-            )}
-            Đồng bộ ngay
-          </button>
+          <div className="panel-actions">
+            <button
+              type="button"
+              className="ds-button ds-button--primary"
+              onClick={onRunSync}
+              disabled={isSyncing}
+            >
+              {isSyncing ? (
+                <RefreshCw size={16} strokeWidth={2} className="spin" aria-hidden="true" />
+              ) : (
+                <UploadCloud size={16} strokeWidth={2} aria-hidden="true" />
+              )}
+              Đồng bộ ngay
+            </button>
+          </div>
         </div>
+
+        {summary ? (
+          <div className="sync-summary-bar" aria-live="polite">
+            <span className="sync-summary-chip">
+              Quét <strong>{summary.scannedFiles}</strong>
+            </span>
+            <span className="sync-summary-chip">
+              Gửi <strong>{summary.sentResults}</strong>
+            </span>
+            <span className="sync-summary-chip">
+              Bỏ qua <strong>{summary.skippedFiles}</strong>
+            </span>
+            <span className="sync-summary-chip">
+              Lỗi <strong>{summary.failedFiles}</strong>
+            </span>
+          </div>
+        ) : null}
 
         <div className="table-shell">
           <table>
@@ -53,17 +84,38 @@ export function SyncPanel({ rows, summary, onRunSync, isSyncing }: SyncPanelProp
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.fileName}</td>
-                  <td>{row.patientId}</td>
-                  <td>{row.measuredAt}</td>
-                  <td>
-                    <span className={`status-badge ${row.status}`}>{statusCopy[row.status]}</span>
-                  </td>
-                  <td>{row.error ?? "-"}</td>
-                </tr>
-              ))}
+              {rows.map((row) => {
+                const isSelected = selected?.id === row.id;
+                return (
+                  <tr
+                    key={row.id}
+                    className={isSelected ? "is-selected" : undefined}
+                    onClick={() => onSelect(row.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelect(row.id);
+                      }
+                    }}
+                    tabIndex={0}
+                    aria-selected={isSelected}
+                  >
+                    <td className="cell-file" title={row.fileName}>
+                      {row.fileName}
+                    </td>
+                    <td>{row.patientId}</td>
+                    <td>{row.measuredAt}</td>
+                    <td>
+                      <span className={`status-badge ${row.status}`}>
+                        {statusCopy[row.status]}
+                      </span>
+                    </td>
+                    <td className="cell-error" title={row.error}>
+                      {row.error ?? "—"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -71,18 +123,24 @@ export function SyncPanel({ rows, summary, onRunSync, isSyncing }: SyncPanelProp
 
       <aside className="preview-panel ds-card">
         <h3>Preview kết quả</h3>
-        {summary ? (
-          <p>
-            Quét {summary.scannedFiles} file, gửi {summary.sentResults}, bỏ qua{" "}
-            {summary.skippedFiles}, lỗi {summary.failedFiles}.
-          </p>
+        {selected ? (
+          <>
+            <div className="preview-panel__meta">
+              <span>File đang chọn</span>
+              <strong title={selected.fileName}>{selected.fileName}</strong>
+              <span>Patient · {selected.patientId}</span>
+            </div>
+            <div className="eye-grid">
+              <EyePreview title="Mắt phải (OD)" value={selected.right} />
+              <EyePreview title="Mắt trái (OS)" value={selected.left} />
+            </div>
+            <p style={{ marginTop: 14 }}>
+              Preview map với command <code>preview_xml_file</code> khi parse XML thật.
+            </p>
+          </>
         ) : (
-          <p>Dữ liệu mẫu từ file mới nhất, dùng để đặt layout preview trước khi gửi.</p>
+          <p>Chưa có file để preview.</p>
         )}
-        <div className="eye-grid">
-          <EyePreview title="Mắt phải" value={selected.right} />
-          <EyePreview title="Mắt trái" value={selected.left} />
-        </div>
       </aside>
     </section>
   );
@@ -101,15 +159,15 @@ function EyePreview({
       <dl>
         <div>
           <dt>SPH</dt>
-          <dd>{value.sphere}</dd>
+          <dd>{value.sphere || "—"}</dd>
         </div>
         <div>
           <dt>CYL</dt>
-          <dd>{value.cylinder}</dd>
+          <dd>{value.cylinder || "—"}</dd>
         </div>
         <div>
           <dt>AX</dt>
-          <dd>{value.axis}</dd>
+          <dd>{value.axis || "—"}</dd>
         </div>
       </dl>
     </div>

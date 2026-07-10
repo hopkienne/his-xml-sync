@@ -1,0 +1,3338 @@
+[
+  {
+    "id": 79,
+    "name": "+6.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 80,
+    "name": "+7.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 81,
+    "name": "+7.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 82,
+    "name": "+7.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 83,
+    "name": "+7.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 84,
+    "name": "+8.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 85,
+    "name": "+8.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 86,
+    "name": "+8.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 87,
+    "name": "+8.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 88,
+    "name": "+9.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 89,
+    "name": "+9.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 90,
+    "name": "+9.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 91,
+    "name": "+9.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 92,
+    "name": "+10.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 93,
+    "name": "-0.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 94,
+    "name": "-0.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 53,
+    "name": "+0.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 54,
+    "name": "+0.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 55,
+    "name": "+0.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 56,
+    "name": "+1.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 57,
+    "name": "+1.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 58,
+    "name": "+1.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 59,
+    "name": "+1.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 60,
+    "name": "+2.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 61,
+    "name": "+2.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 62,
+    "name": "+2.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 63,
+    "name": "+2.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 64,
+    "name": "+3.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 65,
+    "name": "+3.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 66,
+    "name": "+3.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 67,
+    "name": "+3.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 68,
+    "name": "+4.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 69,
+    "name": "+4.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 70,
+    "name": "+4.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 71,
+    "name": "+4.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 72,
+    "name": "+5.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 73,
+    "name": "+5.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 74,
+    "name": "+5.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 75,
+    "name": "+5.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 76,
+    "name": "+6.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 77,
+    "name": "+6.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 78,
+    "name": "+6.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 95,
+    "name": "-0.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 96,
+    "name": "-1.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 97,
+    "name": "-1.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 98,
+    "name": "-1.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 99,
+    "name": "-1.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 100,
+    "name": "-2.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 101,
+    "name": "-2.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 102,
+    "name": "-2.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 103,
+    "name": "-2.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 104,
+    "name": "-3.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 105,
+    "name": "-3.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 106,
+    "name": "-3.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 107,
+    "name": "-3.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 108,
+    "name": "-4.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 109,
+    "name": "-4.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 110,
+    "name": "-4.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 111,
+    "name": "-4.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 112,
+    "name": "-5.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 113,
+    "name": "-5.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 114,
+    "name": "-5.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 115,
+    "name": "-5.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 116,
+    "name": "-6.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 117,
+    "name": "-6.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 118,
+    "name": "-6.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 119,
+    "name": "-6.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 120,
+    "name": "-7.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 121,
+    "name": "-7.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 122,
+    "name": "-7.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 123,
+    "name": "-7.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 124,
+    "name": "-8.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 125,
+    "name": "-8.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 126,
+    "name": "-8.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 127,
+    "name": "-8.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 128,
+    "name": "-9.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 129,
+    "name": "-9.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 130,
+    "name": "-9.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 131,
+    "name": "-9.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 1152,
+    "name": "Không đo",
+    "kind": "CYL"
+  },
+  {
+    "id": 133,
+    "name": "+0.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 134,
+    "name": "+0.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 135,
+    "name": "+0.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 136,
+    "name": "+1.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 137,
+    "name": "+1.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 138,
+    "name": "+1.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 139,
+    "name": "+1.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 140,
+    "name": "+2.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 141,
+    "name": "+2.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 142,
+    "name": "+2.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 143,
+    "name": "+2.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 144,
+    "name": "+3.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 145,
+    "name": "+3.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 146,
+    "name": "+3.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 147,
+    "name": "+3.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 148,
+    "name": "+4.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 149,
+    "name": "+4.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 150,
+    "name": "+4.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 151,
+    "name": "+4.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 152,
+    "name": "+5.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 153,
+    "name": "+5.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 154,
+    "name": "+5.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 155,
+    "name": "+5.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 156,
+    "name": "+6.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 157,
+    "name": "+6.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 158,
+    "name": "+6.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 159,
+    "name": "+6.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 160,
+    "name": "+7.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 161,
+    "name": "+7.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 162,
+    "name": "+7.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 163,
+    "name": "+7.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 164,
+    "name": "+8.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 165,
+    "name": "+8.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 166,
+    "name": "+8.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 167,
+    "name": "+8.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 168,
+    "name": "+9.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 169,
+    "name": "+9.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 170,
+    "name": "+9.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 171,
+    "name": "+9.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 172,
+    "name": "+10.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 173,
+    "name": "-0.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 174,
+    "name": "-0.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 175,
+    "name": "-0.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 176,
+    "name": "-1.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 177,
+    "name": "-1.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 178,
+    "name": "-1.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 179,
+    "name": "-1.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 180,
+    "name": "-2.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 181,
+    "name": "-2.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 182,
+    "name": "-2.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 183,
+    "name": "-2.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 184,
+    "name": "-3.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 185,
+    "name": "-3.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 186,
+    "name": "-3.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 187,
+    "name": "-3.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 188,
+    "name": "-4.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 189,
+    "name": "-4.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 190,
+    "name": "-4.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 191,
+    "name": "-4.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 192,
+    "name": "-5.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 193,
+    "name": "-5.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 194,
+    "name": "-5.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 195,
+    "name": "-5.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 196,
+    "name": "-6.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 197,
+    "name": "-6.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 198,
+    "name": "-6.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 199,
+    "name": "-6.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 200,
+    "name": "-7.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 201,
+    "name": "-7.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 202,
+    "name": "-7.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 203,
+    "name": "-7.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 204,
+    "name": "-8.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 205,
+    "name": "-8.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 206,
+    "name": "-8.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 207,
+    "name": "-8.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 208,
+    "name": "-9.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 209,
+    "name": "-9.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 210,
+    "name": "-9.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 211,
+    "name": "-9.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 1153,
+    "name": "Không đo",
+    "kind": "Axis"
+  },
+  {
+    "id": 213,
+    "name": "0",
+    "kind": "Axis"
+  },
+  {
+    "id": 214,
+    "name": "1",
+    "kind": "Axis"
+  },
+  {
+    "id": 215,
+    "name": "2",
+    "kind": "Axis"
+  },
+  {
+    "id": 216,
+    "name": "3",
+    "kind": "Axis"
+  },
+  {
+    "id": 217,
+    "name": "4",
+    "kind": "Axis"
+  },
+  {
+    "id": 218,
+    "name": "5",
+    "kind": "Axis"
+  },
+  {
+    "id": 219,
+    "name": "6",
+    "kind": "Axis"
+  },
+  {
+    "id": 220,
+    "name": "7",
+    "kind": "Axis"
+  },
+  {
+    "id": 221,
+    "name": "8",
+    "kind": "Axis"
+  },
+  {
+    "id": 222,
+    "name": "9",
+    "kind": "Axis"
+  },
+  {
+    "id": 223,
+    "name": "10",
+    "kind": "Axis"
+  },
+  {
+    "id": 224,
+    "name": "11",
+    "kind": "Axis"
+  },
+  {
+    "id": 225,
+    "name": "12",
+    "kind": "Axis"
+  },
+  {
+    "id": 226,
+    "name": "13",
+    "kind": "Axis"
+  },
+  {
+    "id": 227,
+    "name": "14",
+    "kind": "Axis"
+  },
+  {
+    "id": 228,
+    "name": "15",
+    "kind": "Axis"
+  },
+  {
+    "id": 229,
+    "name": "16",
+    "kind": "Axis"
+  },
+  {
+    "id": 230,
+    "name": "17",
+    "kind": "Axis"
+  },
+  {
+    "id": 231,
+    "name": "18",
+    "kind": "Axis"
+  },
+  {
+    "id": 232,
+    "name": "19",
+    "kind": "Axis"
+  },
+  {
+    "id": 233,
+    "name": "20",
+    "kind": "Axis"
+  },
+  {
+    "id": 234,
+    "name": "21",
+    "kind": "Axis"
+  },
+  {
+    "id": 235,
+    "name": "22",
+    "kind": "Axis"
+  },
+  {
+    "id": 236,
+    "name": "23",
+    "kind": "Axis"
+  },
+  {
+    "id": 237,
+    "name": "24",
+    "kind": "Axis"
+  },
+  {
+    "id": 238,
+    "name": "25",
+    "kind": "Axis"
+  },
+  {
+    "id": 239,
+    "name": "26",
+    "kind": "Axis"
+  },
+  {
+    "id": 240,
+    "name": "27",
+    "kind": "Axis"
+  },
+  {
+    "id": 241,
+    "name": "28",
+    "kind": "Axis"
+  },
+  {
+    "id": 242,
+    "name": "29",
+    "kind": "Axis"
+  },
+  {
+    "id": 243,
+    "name": "30",
+    "kind": "Axis"
+  },
+  {
+    "id": 244,
+    "name": "31",
+    "kind": "Axis"
+  },
+  {
+    "id": 245,
+    "name": "32",
+    "kind": "Axis"
+  },
+  {
+    "id": 246,
+    "name": "33",
+    "kind": "Axis"
+  },
+  {
+    "id": 247,
+    "name": "34",
+    "kind": "Axis"
+  },
+  {
+    "id": 248,
+    "name": "35",
+    "kind": "Axis"
+  },
+  {
+    "id": 249,
+    "name": "36",
+    "kind": "Axis"
+  },
+  {
+    "id": 250,
+    "name": "37",
+    "kind": "Axis"
+  },
+  {
+    "id": 251,
+    "name": "38",
+    "kind": "Axis"
+  },
+  {
+    "id": 252,
+    "name": "39",
+    "kind": "Axis"
+  },
+  {
+    "id": 253,
+    "name": "40",
+    "kind": "Axis"
+  },
+  {
+    "id": 254,
+    "name": "41",
+    "kind": "Axis"
+  },
+  {
+    "id": 255,
+    "name": "42",
+    "kind": "Axis"
+  },
+  {
+    "id": 256,
+    "name": "43",
+    "kind": "Axis"
+  },
+  {
+    "id": 257,
+    "name": "44",
+    "kind": "Axis"
+  },
+  {
+    "id": 258,
+    "name": "45",
+    "kind": "Axis"
+  },
+  {
+    "id": 259,
+    "name": "46",
+    "kind": "Axis"
+  },
+  {
+    "id": 260,
+    "name": "47",
+    "kind": "Axis"
+  },
+  {
+    "id": 261,
+    "name": "48",
+    "kind": "Axis"
+  },
+  {
+    "id": 262,
+    "name": "49",
+    "kind": "Axis"
+  },
+  {
+    "id": 263,
+    "name": "50",
+    "kind": "Axis"
+  },
+  {
+    "id": 264,
+    "name": "51",
+    "kind": "Axis"
+  },
+  {
+    "id": 265,
+    "name": "52",
+    "kind": "Axis"
+  },
+  {
+    "id": 266,
+    "name": "53",
+    "kind": "Axis"
+  },
+  {
+    "id": 267,
+    "name": "54",
+    "kind": "Axis"
+  },
+  {
+    "id": 268,
+    "name": "55",
+    "kind": "Axis"
+  },
+  {
+    "id": 269,
+    "name": "56",
+    "kind": "Axis"
+  },
+  {
+    "id": 270,
+    "name": "57",
+    "kind": "Axis"
+  },
+  {
+    "id": 271,
+    "name": "58",
+    "kind": "Axis"
+  },
+  {
+    "id": 272,
+    "name": "59",
+    "kind": "Axis"
+  },
+  {
+    "id": 273,
+    "name": "60",
+    "kind": "Axis"
+  },
+  {
+    "id": 274,
+    "name": "61",
+    "kind": "Axis"
+  },
+  {
+    "id": 275,
+    "name": "62",
+    "kind": "Axis"
+  },
+  {
+    "id": 276,
+    "name": "63",
+    "kind": "Axis"
+  },
+  {
+    "id": 277,
+    "name": "64",
+    "kind": "Axis"
+  },
+  {
+    "id": 278,
+    "name": "65",
+    "kind": "Axis"
+  },
+  {
+    "id": 279,
+    "name": "66",
+    "kind": "Axis"
+  },
+  {
+    "id": 280,
+    "name": "67",
+    "kind": "Axis"
+  },
+  {
+    "id": 281,
+    "name": "68",
+    "kind": "Axis"
+  },
+  {
+    "id": 282,
+    "name": "69",
+    "kind": "Axis"
+  },
+  {
+    "id": 283,
+    "name": "70",
+    "kind": "Axis"
+  },
+  {
+    "id": 284,
+    "name": "71",
+    "kind": "Axis"
+  },
+  {
+    "id": 285,
+    "name": "72",
+    "kind": "Axis"
+  },
+  {
+    "id": 286,
+    "name": "73",
+    "kind": "Axis"
+  },
+  {
+    "id": 287,
+    "name": "74",
+    "kind": "Axis"
+  },
+  {
+    "id": 288,
+    "name": "75",
+    "kind": "Axis"
+  },
+  {
+    "id": 289,
+    "name": "76",
+    "kind": "Axis"
+  },
+  {
+    "id": 290,
+    "name": "77",
+    "kind": "Axis"
+  },
+  {
+    "id": 291,
+    "name": "78",
+    "kind": "Axis"
+  },
+  {
+    "id": 292,
+    "name": "79",
+    "kind": "Axis"
+  },
+  {
+    "id": 293,
+    "name": "80",
+    "kind": "Axis"
+  },
+  {
+    "id": 294,
+    "name": "81",
+    "kind": "Axis"
+  },
+  {
+    "id": 295,
+    "name": "82",
+    "kind": "Axis"
+  },
+  {
+    "id": 296,
+    "name": "83",
+    "kind": "Axis"
+  },
+  {
+    "id": 297,
+    "name": "84",
+    "kind": "Axis"
+  },
+  {
+    "id": 298,
+    "name": "85",
+    "kind": "Axis"
+  },
+  {
+    "id": 299,
+    "name": "86",
+    "kind": "Axis"
+  },
+  {
+    "id": 300,
+    "name": "87",
+    "kind": "Axis"
+  },
+  {
+    "id": 301,
+    "name": "88",
+    "kind": "Axis"
+  },
+  {
+    "id": 302,
+    "name": "89",
+    "kind": "Axis"
+  },
+  {
+    "id": 303,
+    "name": "90",
+    "kind": "Axis"
+  },
+  {
+    "id": 304,
+    "name": "91",
+    "kind": "Axis"
+  },
+  {
+    "id": 305,
+    "name": "92",
+    "kind": "Axis"
+  },
+  {
+    "id": 306,
+    "name": "93",
+    "kind": "Axis"
+  },
+  {
+    "id": 307,
+    "name": "94",
+    "kind": "Axis"
+  },
+  {
+    "id": 308,
+    "name": "95",
+    "kind": "Axis"
+  },
+  {
+    "id": 309,
+    "name": "96",
+    "kind": "Axis"
+  },
+  {
+    "id": 310,
+    "name": "97",
+    "kind": "Axis"
+  },
+  {
+    "id": 311,
+    "name": "98",
+    "kind": "Axis"
+  },
+  {
+    "id": 312,
+    "name": "99",
+    "kind": "Axis"
+  },
+  {
+    "id": 313,
+    "name": "100",
+    "kind": "Axis"
+  },
+  {
+    "id": 314,
+    "name": "101",
+    "kind": "Axis"
+  },
+  {
+    "id": 315,
+    "name": "102",
+    "kind": "Axis"
+  },
+  {
+    "id": 316,
+    "name": "103",
+    "kind": "Axis"
+  },
+  {
+    "id": 317,
+    "name": "104",
+    "kind": "Axis"
+  },
+  {
+    "id": 318,
+    "name": "105",
+    "kind": "Axis"
+  },
+  {
+    "id": 319,
+    "name": "106",
+    "kind": "Axis"
+  },
+  {
+    "id": 320,
+    "name": "107",
+    "kind": "Axis"
+  },
+  {
+    "id": 321,
+    "name": "108",
+    "kind": "Axis"
+  },
+  {
+    "id": 322,
+    "name": "109",
+    "kind": "Axis"
+  },
+  {
+    "id": 323,
+    "name": "110",
+    "kind": "Axis"
+  },
+  {
+    "id": 324,
+    "name": "111",
+    "kind": "Axis"
+  },
+  {
+    "id": 325,
+    "name": "112",
+    "kind": "Axis"
+  },
+  {
+    "id": 326,
+    "name": "113",
+    "kind": "Axis"
+  },
+  {
+    "id": 327,
+    "name": "114",
+    "kind": "Axis"
+  },
+  {
+    "id": 328,
+    "name": "115",
+    "kind": "Axis"
+  },
+  {
+    "id": 329,
+    "name": "116",
+    "kind": "Axis"
+  },
+  {
+    "id": 330,
+    "name": "117",
+    "kind": "Axis"
+  },
+  {
+    "id": 331,
+    "name": "118",
+    "kind": "Axis"
+  },
+  {
+    "id": 332,
+    "name": "119",
+    "kind": "Axis"
+  },
+  {
+    "id": 333,
+    "name": "120",
+    "kind": "Axis"
+  },
+  {
+    "id": 334,
+    "name": "121",
+    "kind": "Axis"
+  },
+  {
+    "id": 335,
+    "name": "122",
+    "kind": "Axis"
+  },
+  {
+    "id": 336,
+    "name": "123",
+    "kind": "Axis"
+  },
+  {
+    "id": 337,
+    "name": "124",
+    "kind": "Axis"
+  },
+  {
+    "id": 338,
+    "name": "125",
+    "kind": "Axis"
+  },
+  {
+    "id": 339,
+    "name": "126",
+    "kind": "Axis"
+  },
+  {
+    "id": 340,
+    "name": "127",
+    "kind": "Axis"
+  },
+  {
+    "id": 341,
+    "name": "128",
+    "kind": "Axis"
+  },
+  {
+    "id": 342,
+    "name": "129",
+    "kind": "Axis"
+  },
+  {
+    "id": 343,
+    "name": "130",
+    "kind": "Axis"
+  },
+  {
+    "id": 344,
+    "name": "131",
+    "kind": "Axis"
+  },
+  {
+    "id": 345,
+    "name": "132",
+    "kind": "Axis"
+  },
+  {
+    "id": 346,
+    "name": "133",
+    "kind": "Axis"
+  },
+  {
+    "id": 347,
+    "name": "134",
+    "kind": "Axis"
+  },
+  {
+    "id": 348,
+    "name": "135",
+    "kind": "Axis"
+  },
+  {
+    "id": 349,
+    "name": "136",
+    "kind": "Axis"
+  },
+  {
+    "id": 350,
+    "name": "137",
+    "kind": "Axis"
+  },
+  {
+    "id": 351,
+    "name": "138",
+    "kind": "Axis"
+  },
+  {
+    "id": 352,
+    "name": "139",
+    "kind": "Axis"
+  },
+  {
+    "id": 353,
+    "name": "140",
+    "kind": "Axis"
+  },
+  {
+    "id": 354,
+    "name": "141",
+    "kind": "Axis"
+  },
+  {
+    "id": 355,
+    "name": "142",
+    "kind": "Axis"
+  },
+  {
+    "id": 356,
+    "name": "143",
+    "kind": "Axis"
+  },
+  {
+    "id": 357,
+    "name": "144",
+    "kind": "Axis"
+  },
+  {
+    "id": 358,
+    "name": "145",
+    "kind": "Axis"
+  },
+  {
+    "id": 359,
+    "name": "146",
+    "kind": "Axis"
+  },
+  {
+    "id": 360,
+    "name": "147",
+    "kind": "Axis"
+  },
+  {
+    "id": 361,
+    "name": "148",
+    "kind": "Axis"
+  },
+  {
+    "id": 362,
+    "name": "149",
+    "kind": "Axis"
+  },
+  {
+    "id": 363,
+    "name": "150",
+    "kind": "Axis"
+  },
+  {
+    "id": 364,
+    "name": "151",
+    "kind": "Axis"
+  },
+  {
+    "id": 365,
+    "name": "152",
+    "kind": "Axis"
+  },
+  {
+    "id": 366,
+    "name": "153",
+    "kind": "Axis"
+  },
+  {
+    "id": 367,
+    "name": "154",
+    "kind": "Axis"
+  },
+  {
+    "id": 368,
+    "name": "155",
+    "kind": "Axis"
+  },
+  {
+    "id": 369,
+    "name": "156",
+    "kind": "Axis"
+  },
+  {
+    "id": 370,
+    "name": "157",
+    "kind": "Axis"
+  },
+  {
+    "id": 371,
+    "name": "158",
+    "kind": "Axis"
+  },
+  {
+    "id": 372,
+    "name": "159",
+    "kind": "Axis"
+  },
+  {
+    "id": 373,
+    "name": "160",
+    "kind": "Axis"
+  },
+  {
+    "id": 374,
+    "name": "161",
+    "kind": "Axis"
+  },
+  {
+    "id": 375,
+    "name": "162",
+    "kind": "Axis"
+  },
+  {
+    "id": 376,
+    "name": "163",
+    "kind": "Axis"
+  },
+  {
+    "id": 377,
+    "name": "164",
+    "kind": "Axis"
+  },
+  {
+    "id": 378,
+    "name": "165",
+    "kind": "Axis"
+  },
+  {
+    "id": 379,
+    "name": "166",
+    "kind": "Axis"
+  },
+  {
+    "id": 380,
+    "name": "167",
+    "kind": "Axis"
+  },
+  {
+    "id": 381,
+    "name": "168",
+    "kind": "Axis"
+  },
+  {
+    "id": 382,
+    "name": "169",
+    "kind": "Axis"
+  },
+  {
+    "id": 383,
+    "name": "170",
+    "kind": "Axis"
+  },
+  {
+    "id": 384,
+    "name": "171",
+    "kind": "Axis"
+  },
+  {
+    "id": 385,
+    "name": "172",
+    "kind": "Axis"
+  },
+  {
+    "id": 386,
+    "name": "173",
+    "kind": "Axis"
+  },
+  {
+    "id": 387,
+    "name": "174",
+    "kind": "Axis"
+  },
+  {
+    "id": 388,
+    "name": "175",
+    "kind": "Axis"
+  },
+  {
+    "id": 389,
+    "name": "176",
+    "kind": "Axis"
+  },
+  {
+    "id": 390,
+    "name": "177",
+    "kind": "Axis"
+  },
+  {
+    "id": 391,
+    "name": "178",
+    "kind": "Axis"
+  },
+  {
+    "id": 392,
+    "name": "179",
+    "kind": "Axis"
+  },
+  {
+    "id": 393,
+    "name": "180",
+    "kind": "Axis"
+  },
+  {
+    "id": 132,
+    "name": "-10.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 593,
+    "name": "+10.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 594,
+    "name": "+10.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 595,
+    "name": "+10.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 596,
+    "name": "+11.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 597,
+    "name": "+11.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 598,
+    "name": "+11.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 599,
+    "name": "+11.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 600,
+    "name": "+12.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 601,
+    "name": "+12.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 652,
+    "name": "+12.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 653,
+    "name": "+12.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 654,
+    "name": "+13.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 655,
+    "name": "+13.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 656,
+    "name": "+13.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 657,
+    "name": "+13.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 658,
+    "name": "+14.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 659,
+    "name": "+14.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 660,
+    "name": "+14.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 661,
+    "name": "+14.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 662,
+    "name": "+15.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 663,
+    "name": "+15.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 664,
+    "name": "+15.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 665,
+    "name": "+15.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 666,
+    "name": "+16.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 667,
+    "name": "+16.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 668,
+    "name": "+16.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 669,
+    "name": "+16.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 670,
+    "name": "+17.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 671,
+    "name": "+17.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 672,
+    "name": "+17.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 673,
+    "name": "+17.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 674,
+    "name": "+18.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 675,
+    "name": "+18.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 676,
+    "name": "+18.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 677,
+    "name": "+18.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 678,
+    "name": "+19.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 679,
+    "name": "+19.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 680,
+    "name": "+19.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 681,
+    "name": "+19.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 682,
+    "name": "+20.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 683,
+    "name": "+20.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 684,
+    "name": "+20.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 685,
+    "name": "+20.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 686,
+    "name": "+21.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 687,
+    "name": "+21.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 688,
+    "name": "+21.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 689,
+    "name": "+21.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 690,
+    "name": "+22.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 691,
+    "name": "+22.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 692,
+    "name": "+22.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 693,
+    "name": "+22.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 694,
+    "name": "+23.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 695,
+    "name": "+23.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 696,
+    "name": "+23.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 697,
+    "name": "+23.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 698,
+    "name": "+24.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 699,
+    "name": "+24.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 700,
+    "name": "+24.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 701,
+    "name": "+24.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 702,
+    "name": "+25.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 703,
+    "name": "+25.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 704,
+    "name": "+25.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 705,
+    "name": "+25.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 706,
+    "name": "+26.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 707,
+    "name": "+26.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 708,
+    "name": "+26.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 709,
+    "name": "+26.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 710,
+    "name": "+27.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 711,
+    "name": "+27.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 712,
+    "name": "+27.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 713,
+    "name": "+27.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 714,
+    "name": "+28.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 715,
+    "name": "+28.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 716,
+    "name": "+28.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 717,
+    "name": "+28.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 718,
+    "name": "+29.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 719,
+    "name": "+29.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 720,
+    "name": "+29.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 721,
+    "name": "+29.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 722,
+    "name": "+30.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 723,
+    "name": "-10.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 724,
+    "name": "-10.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 725,
+    "name": "-10.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 726,
+    "name": "-11.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 727,
+    "name": "-11.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 728,
+    "name": "-11.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 729,
+    "name": "-11.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 730,
+    "name": "-12.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 731,
+    "name": "-12.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 732,
+    "name": "-12.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 733,
+    "name": "-12.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 734,
+    "name": "-13.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 735,
+    "name": "-13.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 736,
+    "name": "-13.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 737,
+    "name": "-13.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 738,
+    "name": "-14.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 739,
+    "name": "-14.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 740,
+    "name": "-14.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 741,
+    "name": "-14.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 742,
+    "name": "-15.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 743,
+    "name": "-15.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 744,
+    "name": "-15.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 745,
+    "name": "-15.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 746,
+    "name": "-16.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 747,
+    "name": "-16.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 748,
+    "name": "-16.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 749,
+    "name": "-16.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 750,
+    "name": "-17.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 751,
+    "name": "-17.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 752,
+    "name": "-17.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 753,
+    "name": "-17.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 754,
+    "name": "-18.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 755,
+    "name": "-18.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 756,
+    "name": "-18.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 757,
+    "name": "-18.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 758,
+    "name": "-19.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 759,
+    "name": "-19.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 760,
+    "name": "-19.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 761,
+    "name": "-19.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 762,
+    "name": "-20.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 763,
+    "name": "-20.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 764,
+    "name": "-20.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 765,
+    "name": "-20.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 766,
+    "name": "-21.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 767,
+    "name": "-21.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 768,
+    "name": "-21.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 769,
+    "name": "-21.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 770,
+    "name": "-22.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 771,
+    "name": "-22.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 772,
+    "name": "-22.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 773,
+    "name": "-22.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 774,
+    "name": "-23.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 775,
+    "name": "-23.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 776,
+    "name": "-23.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 777,
+    "name": "-23.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 778,
+    "name": "-24.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 779,
+    "name": "-24.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 780,
+    "name": "-24.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 781,
+    "name": "-24.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 782,
+    "name": "-25.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 783,
+    "name": "-25.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 784,
+    "name": "-25.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 785,
+    "name": "-25.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 786,
+    "name": "-26.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 787,
+    "name": "-26.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 788,
+    "name": "-26.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 789,
+    "name": "-26.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 790,
+    "name": "-27.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 791,
+    "name": "-27.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 792,
+    "name": "-27.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 793,
+    "name": "-27.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 794,
+    "name": "-28.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 795,
+    "name": "-28.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 796,
+    "name": "-28.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 797,
+    "name": "-28.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 798,
+    "name": "-29.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 799,
+    "name": "-29.25",
+    "kind": "SPH"
+  },
+  {
+    "id": 800,
+    "name": "-29.50",
+    "kind": "SPH"
+  },
+  {
+    "id": 801,
+    "name": "-29.75",
+    "kind": "SPH"
+  },
+  {
+    "id": 802,
+    "name": "-30.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 212,
+    "name": "-10.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 603,
+    "name": "+10.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 604,
+    "name": "+10.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 605,
+    "name": "+10.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 606,
+    "name": "+11.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 607,
+    "name": "+11.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 608,
+    "name": "+11.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 609,
+    "name": "+11.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 610,
+    "name": "+12.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 611,
+    "name": "+12.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 612,
+    "name": "+12.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 613,
+    "name": "+12.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 614,
+    "name": "+13.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 615,
+    "name": "+13.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 616,
+    "name": "+13.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 617,
+    "name": "+13.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 618,
+    "name": "+14.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 619,
+    "name": "+14.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 620,
+    "name": "+14.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 621,
+    "name": "+14.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 622,
+    "name": "+15.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 623,
+    "name": "+15.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 624,
+    "name": "+15.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 625,
+    "name": "+15.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 626,
+    "name": "+16.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 627,
+    "name": "+16.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 628,
+    "name": "+16.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 629,
+    "name": "+16.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 630,
+    "name": "+17.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 631,
+    "name": "+17.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 632,
+    "name": "+17.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 633,
+    "name": "+17.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 634,
+    "name": "+18.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 635,
+    "name": "+18.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 636,
+    "name": "+18.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 637,
+    "name": "+18.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 638,
+    "name": "+19.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 639,
+    "name": "+19.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 640,
+    "name": "+19.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 641,
+    "name": "+19.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 642,
+    "name": "+20.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 643,
+    "name": "+20.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 644,
+    "name": "+20.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 645,
+    "name": "+20.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 646,
+    "name": "+21.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 647,
+    "name": "+21.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 648,
+    "name": "+21.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 649,
+    "name": "+21.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 650,
+    "name": "+22.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 651,
+    "name": "+22.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 852,
+    "name": "+22.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 853,
+    "name": "+22.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 854,
+    "name": "+23.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 855,
+    "name": "+23.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 856,
+    "name": "+23.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 857,
+    "name": "+23.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 858,
+    "name": "+24.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 859,
+    "name": "+24.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 860,
+    "name": "+24.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 861,
+    "name": "+24.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 862,
+    "name": "+25.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 863,
+    "name": "+25.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 864,
+    "name": "+25.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 865,
+    "name": "+25.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 866,
+    "name": "+26.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 867,
+    "name": "+26.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 868,
+    "name": "+26.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 869,
+    "name": "+26.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 870,
+    "name": "+27.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 871,
+    "name": "+27.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 872,
+    "name": "+27.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 873,
+    "name": "+27.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 874,
+    "name": "+28.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 875,
+    "name": "+28.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 876,
+    "name": "+28.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 877,
+    "name": "+28.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 878,
+    "name": "+29.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 879,
+    "name": "+29.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 880,
+    "name": "+29.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 881,
+    "name": "+29.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 882,
+    "name": "+30.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 883,
+    "name": "-10.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 884,
+    "name": "-10.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 885,
+    "name": "-10.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 886,
+    "name": "-11.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 887,
+    "name": "-11.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 888,
+    "name": "-11.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 889,
+    "name": "-11.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 890,
+    "name": "-12.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 891,
+    "name": "-12.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 892,
+    "name": "-12.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 893,
+    "name": "-12.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 894,
+    "name": "-13.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 895,
+    "name": "-13.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 896,
+    "name": "-13.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 897,
+    "name": "-13.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 898,
+    "name": "-14.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 899,
+    "name": "-14.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 900,
+    "name": "-14.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 901,
+    "name": "-14.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 902,
+    "name": "-15.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 903,
+    "name": "-15.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 904,
+    "name": "-15.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 905,
+    "name": "-15.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 906,
+    "name": "-16.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 907,
+    "name": "-16.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 908,
+    "name": "-16.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 909,
+    "name": "-16.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 910,
+    "name": "-17.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 911,
+    "name": "-17.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 912,
+    "name": "-17.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 913,
+    "name": "-17.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 914,
+    "name": "-18.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 915,
+    "name": "-18.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 916,
+    "name": "-18.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 917,
+    "name": "-18.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 918,
+    "name": "-19.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 919,
+    "name": "-19.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 920,
+    "name": "-19.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 921,
+    "name": "-19.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 922,
+    "name": "-20.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 923,
+    "name": "-20.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 924,
+    "name": "-20.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 925,
+    "name": "-20.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 926,
+    "name": "-21.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 927,
+    "name": "-21.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 928,
+    "name": "-21.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 929,
+    "name": "-21.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 930,
+    "name": "-22.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 931,
+    "name": "-22.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 932,
+    "name": "-22.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 933,
+    "name": "-22.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 934,
+    "name": "-23.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 935,
+    "name": "-23.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 936,
+    "name": "-23.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 937,
+    "name": "-23.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 938,
+    "name": "-24.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 939,
+    "name": "-24.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 940,
+    "name": "-24.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 941,
+    "name": "-24.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 942,
+    "name": "-25.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 943,
+    "name": "-25.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 944,
+    "name": "-25.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 945,
+    "name": "-25.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 946,
+    "name": "-26.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 947,
+    "name": "-26.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 948,
+    "name": "-26.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 949,
+    "name": "-26.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 950,
+    "name": "-27.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 951,
+    "name": "-27.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 952,
+    "name": "-27.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 953,
+    "name": "-27.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 954,
+    "name": "-28.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 955,
+    "name": "-28.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 956,
+    "name": "-28.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 957,
+    "name": "-28.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 958,
+    "name": "-29.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 959,
+    "name": "-29.25",
+    "kind": "CYL"
+  },
+  {
+    "id": 960,
+    "name": "-29.50",
+    "kind": "CYL"
+  },
+  {
+    "id": 961,
+    "name": "-29.75",
+    "kind": "CYL"
+  },
+  {
+    "id": 962,
+    "name": "-30.00",
+    "kind": "CYL"
+  },
+  {
+    "id": 803,
+    "name": "HK",
+    "kind": "SPH"
+  },
+  {
+    "id": 963,
+    "name": "HK",
+    "kind": "CYL"
+  },
+  {
+    "id": 1302,
+    "name": "0.00",
+    "kind": "SPH"
+  },
+  {
+    "id": 1352,
+    "name": "0.00",
+    "kind": "CYL"
+  }
+]
+

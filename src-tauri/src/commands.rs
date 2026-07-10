@@ -1,36 +1,328 @@
 use crate::{
+    app_logger::{self, ExportLogsResult, LogInfo},
+    db::AppDb,
+    his_api::{self, HisAuthStatus},
+    kr800_process::{self, Kr800ProcessState, ProcessResult},
     license::{self, LicenseInfo, LicenseStatus},
     settings::{self, AppSettings},
     sync::{self, SyncSummary},
     xml_parser::{self, XmlPreview},
+    xml_track::{self, DeviceFolderState, ScanResult, TrackedXmlFile},
 };
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub fn get_license_status() -> LicenseStatus {
+    app_logger::debug("license", "get_license_status");
     license::current_status()
 }
 
 #[tauri::command]
 pub fn activate_license(key: String) -> Result<LicenseInfo, String> {
-    license::activate(&key)
+    app_logger::info(
+        "license",
+        &format!("activate_license key_len={}", key.trim().len()),
+    );
+    match license::activate(&key) {
+        Ok(info) => {
+            app_logger::info(
+                "license",
+                &format!(
+                    "activate_license ok facility={} expires={}",
+                    info.facility_name, info.expires_at
+                ),
+            );
+            Ok(info)
+        }
+        Err(err) => {
+            app_logger::error("license", &format!("activate_license failed: {err}"));
+            Err(err)
+        }
+    }
 }
 
 #[tauri::command]
-pub fn get_settings() -> AppSettings {
-    settings::load()
+pub fn get_settings(db: State<'_, AppDb>) -> Result<AppSettings, String> {
+    app_logger::debug("settings", "get_settings");
+    match settings::load(&db) {
+        Ok(s) => {
+            app_logger::info(
+                "settings",
+                &format!(
+                    "get_settings ok his_api_url={} ds_co_so_kcb_id={} username={}",
+                    s.his_api_url, s.ds_co_so_kcb_id, s.username
+                ),
+            );
+            Ok(s)
+        }
+        Err(err) => {
+            app_logger::error("settings", &format!("get_settings failed: {err}"));
+            Err(err)
+        }
+    }
 }
 
 #[tauri::command]
-pub fn save_settings(settings: AppSettings) -> Result<AppSettings, String> {
-    settings::save(settings)
+pub fn save_settings(db: State<'_, AppDb>, settings: AppSettings) -> Result<AppSettings, String> {
+    app_logger::info(
+        "settings",
+        &format!(
+            "save_settings request his_api_url={} ds_co_so_kcb_id={} username={} password_provided={}",
+            settings.his_api_url,
+            settings.ds_co_so_kcb_id,
+            settings.username,
+            !settings.password.is_empty()
+        ),
+    );
+    match settings::save(&db, settings) {
+        Ok(s) => {
+            app_logger::info(
+                "settings",
+                &format!("save_settings ok updated_at={:?}", s.updated_at),
+            );
+            Ok(s)
+        }
+        Err(err) => {
+            app_logger::error("settings", &format!("save_settings failed: {err}"));
+            Err(err)
+        }
+    }
 }
 
 #[tauri::command]
 pub fn preview_xml_file(path: String) -> Result<XmlPreview, String> {
-    xml_parser::preview_file(&path)
+    app_logger::info("xml_parser", &format!("preview_xml_file path={path}"));
+    match xml_parser::preview_file(&path) {
+        Ok(preview) => {
+            app_logger::info(
+                "xml_parser",
+                &format!("preview_xml_file ok file={}", preview.file_name),
+            );
+            Ok(preview)
+        }
+        Err(err) => {
+            app_logger::error("xml_parser", &format!("preview_xml_file failed: {err}"));
+            Err(err)
+        }
+    }
 }
 
 #[tauri::command]
 pub fn run_sync_once() -> Result<SyncSummary, String> {
-    sync::run_once()
+    app_logger::info("sync", "run_sync_once start");
+    match sync::run_once() {
+        Ok(summary) => {
+            app_logger::info(
+                "sync",
+                &format!(
+                    "run_sync_once done scanned={} sent={} skipped={} failed={}",
+                    summary.scanned_files,
+                    summary.sent_results,
+                    summary.skipped_files,
+                    summary.failed_files
+                ),
+            );
+            Ok(summary)
+        }
+        Err(err) => {
+            app_logger::error("sync", &format!("run_sync_once failed: {err}"));
+            Err(err)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn get_device_folder(
+    db: State<'_, AppDb>,
+    device_key: String,
+) -> Result<DeviceFolderState, String> {
+    app_logger::debug(
+        "xml_track",
+        &format!("get_device_folder device={device_key}"),
+    );
+    match xml_track::get_device_folder(&db, &device_key) {
+        Ok(state) => {
+            app_logger::info(
+                "xml_track",
+                &format!(
+                    "get_device_folder ok device={} folder={:?}",
+                    device_key, state.tracking_folder
+                ),
+            );
+            Ok(state)
+        }
+        Err(err) => {
+            app_logger::error("xml_track", &format!("get_device_folder failed: {err}"));
+            Err(err)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn set_tracking_folder_and_scan(
+    db: State<'_, AppDb>,
+    device_key: String,
+    folder: String,
+) -> Result<ScanResult, String> {
+    app_logger::info(
+        "xml_track",
+        &format!("set_tracking_folder_and_scan device={device_key} folder={folder}"),
+    );
+    match xml_track::set_tracking_folder_and_scan(&db, &device_key, &folder) {
+        Ok(result) => {
+            app_logger::info(
+                "xml_track",
+                &format!(
+                    "set_tracking_folder_and_scan ok scanned={} inserted={} listed={}",
+                    result.scanned_count,
+                    result.inserted_count,
+                    result.files.len()
+                ),
+            );
+            Ok(result)
+        }
+        Err(err) => {
+            app_logger::error(
+                "xml_track",
+                &format!("set_tracking_folder_and_scan failed: {err}"),
+            );
+            Err(err)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn rescan_tracking_folder(
+    db: State<'_, AppDb>,
+    device_key: String,
+) -> Result<ScanResult, String> {
+    app_logger::info(
+        "xml_track",
+        &format!("rescan_tracking_folder device={device_key}"),
+    );
+    match xml_track::rescan_tracking_folder(&db, &device_key) {
+        Ok(result) => {
+            app_logger::info(
+                "xml_track",
+                &format!(
+                    "rescan_tracking_folder ok scanned={} inserted={} listed={}",
+                    result.scanned_count,
+                    result.inserted_count,
+                    result.files.len()
+                ),
+            );
+            Ok(result)
+        }
+        Err(err) => {
+            app_logger::error(
+                "xml_track",
+                &format!("rescan_tracking_folder failed: {err}"),
+            );
+            Err(err)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_xml_files(
+    db: State<'_, AppDb>,
+    device_key: String,
+) -> Result<Vec<TrackedXmlFile>, String> {
+    app_logger::debug("xml_track", &format!("list_xml_files device={device_key}"));
+    match xml_track::list_xml_files(&db, &device_key) {
+        Ok(files) => {
+            app_logger::info(
+                "xml_track",
+                &format!(
+                    "list_xml_files ok device={device_key} count={}",
+                    files.len()
+                ),
+            );
+            Ok(files)
+        }
+        Err(err) => {
+            app_logger::error("xml_track", &format!("list_xml_files failed: {err}"));
+            Err(err)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn process_kr800(
+    app: AppHandle,
+    db: State<'_, AppDb>,
+    process_state: State<'_, Kr800ProcessState>,
+    device_key: String,
+    from_time: String,
+    to_time: String,
+) -> Result<ProcessResult, String> {
+    if device_key != "kr-800" {
+        return Err(format!("Thiết bị chưa được hỗ trợ: {device_key}"));
+    }
+    app_logger::info(
+        "kr800",
+        &format!("process start from={from_time} to={to_time}"),
+    );
+    let result = kr800_process::process(&app, &db, &process_state, &from_time, &to_time).await;
+    match &result {
+        Ok(summary) => app_logger::info(
+            "kr800",
+            &format!(
+                "process done total={} processed={} failed={} skipped={}",
+                summary.total, summary.processed, summary.failed, summary.skipped
+            ),
+        ),
+        Err(error) => app_logger::error("kr800", &format!("process failed: {error}")),
+    }
+    result
+}
+
+#[tauri::command]
+pub fn get_log_info() -> Result<LogInfo, String> {
+    app_logger::get_info()
+}
+
+#[tauri::command]
+pub fn export_app_logs(target_path: String) -> Result<ExportLogsResult, String> {
+    app_logger::info("app", &format!("export_app_logs target={target_path}"));
+    match app_logger::export_to(&target_path) {
+        Ok(result) => Ok(result),
+        Err(err) => {
+            app_logger::error("app", &format!("export_app_logs failed: {err}"));
+            Err(err)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn log_client_event(level: String, module: String, message: String) {
+    app_logger::log_from_frontend(&level, &module, &message);
+}
+
+/// Đăng nhập HIS bằng tài khoản trong app_config, lưu access_token vào auth_session.
+#[tauri::command]
+pub async fn login_his(db: State<'_, AppDb>) -> Result<HisAuthStatus, String> {
+    app_logger::info("his_api", "login_his command start");
+    match his_api::login_and_store(&db).await {
+        Ok(status) => {
+            app_logger::info(
+                "his_api",
+                &format!(
+                    "login_his ok logged_in={} username={:?}",
+                    status.logged_in, status.username
+                ),
+            );
+            Ok(status)
+        }
+        Err(err) => {
+            app_logger::error("his_api", &format!("login_his failed: {err}"));
+            Err(err)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn get_auth_status(db: State<'_, AppDb>) -> Result<HisAuthStatus, String> {
+    app_logger::debug("his_api", "get_auth_status");
+    his_api::get_auth_status(&db)
 }

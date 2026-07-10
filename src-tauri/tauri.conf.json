@@ -25,13 +25,30 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "Viet Nga",
+    "category": "Medical",
+    "shortDescription": "Đồng bộ kết quả khúc xạ XML sang HIS",
+    "longDescription": "HIS XML Sync đọc file XML thiết bị nhãn khoa (TOPCON KR-800), map dữ liệu thị lực và gửi kết quả lên hệ thống HIS. Ứng dụng desktop Windows-first, đóng gói đầy đủ runtime.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "startMenuFolder": "Viet Nga"
+      }
+    }
   }
 }
