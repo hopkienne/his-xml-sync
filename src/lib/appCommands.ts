@@ -1,4 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+  disable as disableAutostart,
+  enable as enableAutostart,
+  isEnabled as isAutostartEnabled,
+} from "@tauri-apps/plugin-autostart";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   AppLogInfo,
@@ -18,6 +23,7 @@ export const fallbackSettings: AppSettings = {
   copyRefractionToNewGlasses: false,
   username: "",
   password: "",
+  hasPassword: false,
   updatedAt: null,
 };
 
@@ -33,6 +39,25 @@ export async function getSettings(): Promise<AppSettings> {
 
 export async function saveSettings(settings: AppSettings): Promise<AppSettings> {
   return await invoke<AppSettings>("save_settings", { settings });
+}
+
+/** Trạng thái khởi động cùng Windows/macOS/Linux (đọc từ OS). */
+export async function getAutostartEnabled(): Promise<boolean> {
+  try {
+    return await isAutostartEnabled();
+  } catch {
+    return false;
+  }
+}
+
+/** Bật/tắt khởi động cùng hệ điều hành. */
+export async function setAutostartEnabled(enabled: boolean): Promise<boolean> {
+  if (enabled) {
+    await enableAutostart();
+  } else {
+    await disableAutostart();
+  }
+  return await isAutostartEnabled();
 }
 
 export async function runSyncOnce(): Promise<SyncSummary> {
@@ -66,8 +91,24 @@ export async function getDeviceFolder(
   try {
     return await invoke<DeviceFolderState>("get_device_folder", { deviceKey });
   } catch {
-    return { deviceKey, trackingFolder: null, updatedAt: null };
+    return {
+      deviceKey,
+      trackingFolder: null,
+      autoProcessEnabled: false,
+      updatedAt: null,
+    };
   }
+}
+
+/** Bật/tắt tự động xử lý HIS cho KR-800 (lưu SQLite). */
+export async function setAutoProcessEnabled(
+  enabled: boolean,
+  deviceKey: string = KR800_DEVICE_KEY,
+): Promise<DeviceFolderState> {
+  return await invoke<DeviceFolderState>("set_auto_process_enabled", {
+    deviceKey,
+    enabled,
+  });
 }
 
 export async function setTrackingFolderAndScan(
@@ -86,11 +127,21 @@ export async function rescanTrackingFolder(
   return await invoke<FolderScanResult>("rescan_tracking_folder", { deviceKey });
 }
 
+/**
+ * Liệt kê file XML theo khoảng `created_at` (`YYYY-MM-DD HH:mm:ss`).
+ * Bắt buộc truyền from/to — backend không trả full table.
+ */
 export async function listXmlFiles(
+  fromTime: string,
+  toTime: string,
   deviceKey: string = KR800_DEVICE_KEY,
 ): Promise<TrackedXmlFile[]> {
   try {
-    return await invoke<TrackedXmlFile[]>("list_xml_files", { deviceKey });
+    return await invoke<TrackedXmlFile[]>("list_xml_files", {
+      deviceKey,
+      fromTime,
+      toTime,
+    });
   } catch {
     return [];
   }

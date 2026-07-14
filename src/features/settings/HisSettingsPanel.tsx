@@ -18,6 +18,19 @@ type HisSettingsPanelProps = {
   logError?: string | null;
   hisAuth?: HisAuthStatus | null;
   hisAuthError?: string | null;
+  /** Tự động xử lý KR-800 (lưu device_config, áp dụng ngay khi đổi). */
+  autoProcessEnabled?: boolean;
+  isTogglingAutoProcess?: boolean;
+  trackingFolder?: string | null;
+  autoProcessError?: string | null;
+  autoProcessStatus?: string | null;
+  onAutoProcessChange?: (enabled: boolean) => void;
+  /** Khởi động cùng Windows (đăng ký OS). */
+  autostartEnabled?: boolean;
+  isTogglingAutostart?: boolean;
+  autostartError?: string | null;
+  autostartStatus?: string | null;
+  onAutostartChange?: (enabled: boolean) => void;
 };
 
 export function HisSettingsPanel({
@@ -37,8 +50,19 @@ export function HisSettingsPanel({
   logError = null,
   hisAuth = null,
   hisAuthError = null,
+  autoProcessEnabled = false,
+  isTogglingAutoProcess = false,
+  trackingFolder = null,
+  autoProcessError = null,
+  autoProcessStatus = null,
+  onAutoProcessChange,
+  autostartEnabled = false,
+  isTogglingAutostart = false,
+  autostartError = null,
+  autostartStatus = null,
+  onAutostartChange,
 }: HisSettingsPanelProps) {
-  const hasStoredPassword = Boolean(settings.updatedAt) && settings.password.length > 0;
+  const hasStoredPassword = Boolean(settings.hasPassword);
 
   return (
     <section className="settings-layout">
@@ -162,53 +186,99 @@ export function HisSettingsPanel({
         <div className="form-panel ds-card">
           <div className="panel-heading">
             <div>
-              <h2>Phiên đăng nhập HIS</h2>
-              <p className="panel-lead">
-                Token lưu bảng <code>auth_session</code> (không hiển thị full access_token trên UI).
-              </p>
+              <h2>Xử lý tự động KR-800</h2>
             </div>
           </div>
 
-          <div className="log-meta-grid">
-            <div>
-              <span>Trạng thái</span>
-              <strong>
-                {hisAuth?.loggedIn
-                  ? "Đã login"
-                  : hisAuthError
-                    ? "Lỗi"
-                    : "Chưa login"}
-              </strong>
+          <div
+            className={`settings-switch${autoProcessEnabled ? " is-on" : ""}`}
+            role="group"
+            aria-labelledby="auto-process-label"
+          >
+            <div className="settings-switch__text">
+              <span id="auto-process-label">Tự động xử lý KR-800</span>
+              <small>
+                {autoProcessEnabled
+                  ? trackingFolder
+                    ? "Đang BẬT — file waiting sẽ tự gửi HIS khi có file mới"
+                    : "Đang BẬT — chưa có thư mục tracking (vào tab KR-800 để chọn)"
+                  : "Đang TẮT — xử lý thủ công bằng nút «Xử lý» trên tab KR-800"}
+              </small>
             </div>
-            <div>
-              <span>User</span>
-              <strong title={hisAuth?.fullName || hisAuth?.username || undefined}>
-                {hisAuth?.fullName || hisAuth?.username || "—"}
-              </strong>
-            </div>
-            <div>
-              <span>coSoKcbId</span>
-              <strong>{hisAuth?.coSoKcbId ?? "—"}</strong>
-            </div>
-            <div>
-              <span>Hết hạn token</span>
-              <strong title={hisAuth?.expiration || undefined}>
-                {hisAuth?.expiration || "—"}
-              </strong>
-            </div>
-            <div>
-              <span>Token type</span>
-              <strong>{hisAuth?.tokenType || "—"}</strong>
-            </div>
-            <div>
-              <span>Có access_token</span>
-              <strong>{hisAuth?.hasAccessToken ? "Có" : "Không"}</strong>
-            </div>
+            <button
+              type="button"
+              className="settings-switch__control"
+              role="switch"
+              aria-checked={autoProcessEnabled}
+              aria-labelledby="auto-process-label"
+              disabled={isTogglingAutoProcess || isSaving || isTestingConnection}
+              onClick={() => onAutoProcessChange?.(!autoProcessEnabled)}
+              title={autoProcessEnabled ? "Tắt tự động xử lý" : "Bật tự động xử lý"}
+            >
+              <span className="settings-switch__track" aria-hidden="true">
+                <span className="settings-switch__thumb" />
+              </span>
+              <span className="settings-switch__state" aria-hidden="true">
+                {isTogglingAutoProcess ? "…" : autoProcessEnabled ? "Bật" : "Tắt"}
+              </span>
+            </button>
           </div>
 
-          {hisAuthError ? (
+          {autoProcessStatus ? <p className="kr800-message">{autoProcessStatus}</p> : null}
+          {autoProcessError ? (
             <p className="settings-error" role="alert">
-              {hisAuthError}
+              {autoProcessError}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="form-panel ds-card">
+          <div className="panel-heading">
+            <div>
+              <h2>Khởi động cùng Windows</h2>
+            </div>
+          </div>
+
+          <div
+            className={`settings-switch${autostartEnabled ? " is-on" : ""}`}
+            role="group"
+            aria-labelledby="autostart-label"
+          >
+            <div className="settings-switch__text">
+              <span id="autostart-label">Chạy khi khởi động Windows</span>
+              <small>
+                {autostartEnabled
+                  ? "Đang BẬT — app sẽ tự mở sau khi đăng nhập Windows"
+                  : "Đang TẮT — cần mở app thủ công"}
+              </small>
+            </div>
+            <button
+              type="button"
+              className="settings-switch__control"
+              role="switch"
+              aria-checked={autostartEnabled}
+              aria-labelledby="autostart-label"
+              disabled={isTogglingAutostart || isSaving || isTestingConnection}
+              onClick={() => onAutostartChange?.(!autostartEnabled)}
+              title={
+                autostartEnabled
+                  ? "Tắt khởi động cùng Windows"
+                  : "Bật khởi động cùng Windows"
+              }
+            >
+              <span className="settings-switch__track" aria-hidden="true">
+                <span className="settings-switch__thumb" />
+              </span>
+              <span className="settings-switch__state" aria-hidden="true">
+                {isTogglingAutostart ? "…" : autostartEnabled ? "Bật" : "Tắt"}
+              </span>
+            </button>
+          </div>
+
+          {autostartStatus ? <p className="kr800-message">{autostartStatus}</p> : null}
+          {autostartError ? (
+            <p className="settings-error" role="alert">
+              {autostartError}
             </p>
           ) : null}
         </div>
@@ -259,22 +329,78 @@ export function HisSettingsPanel({
         </div>
       </div>
 
-      <aside className="side-note">
-        <div className="side-note__icon" aria-hidden="true">
-          <Info size={16} strokeWidth={2} />
+      <aside className="settings-side-stack">
+        <div className="form-panel ds-card settings-session-card">
+          <div className="panel-heading">
+            <div>
+              <h2>Phiên đăng nhập HIS</h2>
+              <p className="panel-lead">
+                Token lưu bảng <code>auth_session</code> (không hiển thị full access_token trên UI).
+              </p>
+            </div>
+          </div>
+
+          <div className="log-meta-grid log-meta-grid--stack">
+            <div>
+              <span>Trạng thái</span>
+              <strong>
+                {hisAuth?.loggedIn
+                  ? "Đã login"
+                  : hisAuthError
+                    ? "Lỗi"
+                    : "Chưa login"}
+              </strong>
+            </div>
+            <div>
+              <span>User</span>
+              <strong title={hisAuth?.fullName || hisAuth?.username || undefined}>
+                {hisAuth?.fullName || hisAuth?.username || "—"}
+              </strong>
+            </div>
+            <div>
+              <span>coSoKcbId</span>
+              <strong>{hisAuth?.coSoKcbId ?? "—"}</strong>
+            </div>
+            <div>
+              <span>Hết hạn token</span>
+              <strong title={hisAuth?.expiration || undefined}>
+                {hisAuth?.expiration || "—"}
+              </strong>
+            </div>
+            <div>
+              <span>Token type</span>
+              <strong>{hisAuth?.tokenType || "—"}</strong>
+            </div>
+            <div>
+              <span>Có access_token</span>
+              <strong>{hisAuth?.hasAccessToken ? "Có" : "Không"}</strong>
+            </div>
+          </div>
+
+          {hisAuthError ? (
+            <p className="settings-error" role="alert">
+              {hisAuthError}
+            </p>
+          ) : null}
         </div>
-        <span>Trạng thái</span>
-        <strong>{connectionLabel}</strong>
-        {settings.updatedAt ? (
+
+        <div className="side-note">
+          <div className="side-note__icon" aria-hidden="true">
+            <Info size={16} strokeWidth={2} />
+          </div>
+          <span>Trạng thái</span>
+          <strong>{connectionLabel}</strong>
+          {settings.updatedAt ? (
+            <p>
+              Lần lưu cấu hình: <code>{formatUpdatedAt(settings.updatedAt)}</code>
+            </p>
+          ) : (
+            <p>Chưa lưu cấu hình HIS trong SQLite.</p>
+          )}
           <p>
-            Lần lưu cấu hình: <code>{formatUpdatedAt(settings.updatedAt)}</code>
+            Endpoint: <code>{"{base}"}/api/his/v1/auth/login</code>
           </p>
-        ) : (
-          <p>Chưa lưu cấu hình HIS trong SQLite.</p>
-        )}
-        <p>
-          Endpoint: <code>{"{base}"}/api/his/v1/auth/login</code>
-        </p>
+        </div>
       </aside>
     </section>
   );

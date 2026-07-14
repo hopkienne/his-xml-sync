@@ -120,10 +120,57 @@ pub async fn process(
     from_time: &str,
     to_time: &str,
 ) -> Result<ProcessResult, String> {
+    process_inner(app, db, state, from_time, to_time, true).await
+}
+
+/// Auto-process nền: bỏ qua nếu pipeline đang chạy (không xếp hàng chờ).
+/// Trả `Ok(None)` khi bận.
+pub async fn try_process(
+    app: &AppHandle,
+    db: &AppDb,
+    state: &Kr800ProcessState,
+    from_time: &str,
+    to_time: &str,
+) -> Result<Option<ProcessResult>, String> {
+    process_inner(app, db, state, from_time, to_time, false)
+        .await
+        .map(Some)
+        .or_else(|err| {
+            if err == BUSY_MSG {
+                Ok(None)
+            } else {
+                Err(err)
+            }
+        })
+}
+
+const BUSY_MSG: &str = "__process_busy__";
+
+async fn process_inner(
+    app: &AppHandle,
+    db: &AppDb,
+    state: &Kr800ProcessState,
+    from_time: &str,
+    to_time: &str,
+    wait_if_busy: bool,
+) -> Result<ProcessResult, String> {
     validate_range(from_time, to_time)?;
-    let _run_guard = state.run_lock.lock().await;
+    let _run_guard = if wait_if_busy {
+        state.run_lock.lock().await
+    } else {
+        match state.run_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return Err(BUSY_MSG.into()),
+        }
+    };
     state.hash_locks.lock().await.clear();
     let settings = settings::load(db)?;
+    if settings.his_api_url.trim().is_empty() {
+        return Err("Chưa cấu hình API URL HIS. Vào Cấu hình để lưu trước.".into());
+    }
+    if settings.username.trim().is_empty() {
+        return Err("Chưa cấu hình tài khoản HIS.".into());
+    }
     let catalog = catalog()?;
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
@@ -144,7 +191,8 @@ pub async fn process(
     let processed = outcomes.iter().filter(|outcome| outcome.processed).count();
     let skipped = outcomes.iter().filter(|outcome| outcome.skipped).count();
     let failed = total.saturating_sub(processed + skipped);
-    let files = xml_track::list_xml_files(db, DEVICE_KEY)?;
+    // Chỉ trả file trong khoảng xử lý — không load full table về UI.
+    let files = xml_track::list_xml_files(db, DEVICE_KEY, Some(from_time), Some(to_time))?;
     Ok(ProcessResult {
         total,
         processed,
@@ -279,7 +327,9 @@ fn match_treatment(
     patients: &PatientIndex,
     patient_id: &str,
 ) -> Result<i64, (&'static str, String)> {
-    match patients.get(patient_id.trim()) {
+    // So sánh không phân biệt hoa/thường (XML ID vs maHoSo từ API).
+    let key = normalize_patient_code(patient_id);
+    match patients.get(&key) {
         None => Err((
             "patient_not_found",
             format!("Không tìm thấy bệnh nhân có mã hồ sơ {patient_id}."),
@@ -303,6 +353,11 @@ fn match_treatment(
             )
         }),
     }
+}
+
+/// Chuẩn hoá mã hồ sơ để so khớp: trim + lowercase.
+fn normalize_patient_code(value: &str) -> String {
+    value.trim().to_lowercase()
 }
 
 async fn patient_index(
@@ -348,8 +403,9 @@ async fn patient_index(
         .map_err(|error| format!("Response người bệnh không hợp lệ: {error}"))?;
     let mut index: PatientIndex = HashMap::new();
     for patient in envelope.data {
+        // Key lowercase để khớp nsCommon:ID / maHoSo không phân biệt hoa-thường.
         index
-            .entry(patient.ma_ho_so.trim().to_string())
+            .entry(normalize_patient_code(&patient.ma_ho_so))
             .or_default()
             .push(patient.nb_dot_dieu_tri_id);
     }
@@ -741,13 +797,24 @@ mod tests {
     #[test]
     fn matches_only_one_treatment_for_patient_code() {
         let mut patients = PatientIndex::new();
-        patients.insert("HS001".into(), vec![Some(42)]);
+        // Index lưu key đã lowercase (giống patient_index khi build từ API).
+        patients.insert("hs001".into(), vec![Some(42)]);
         assert_eq!(
             match_treatment(&patients, " HS001 ").expect("unique patient"),
             42
         );
+        // Khác hoa/thường vẫn khớp (XML ID vs maHoSo).
+        patients.insert("hcm2607070269".into(), vec![Some(99)]);
+        assert_eq!(
+            match_treatment(&patients, "HCM2607070269").expect("case-insensitive"),
+            99
+        );
+        assert_eq!(
+            match_treatment(&patients, " hcm2607070269 ").expect("lower + trim"),
+            99
+        );
 
-        patients.insert("DUP".into(), vec![Some(1), Some(2)]);
+        patients.insert("dup".into(), vec![Some(1), Some(2)]);
         assert_eq!(
             match_treatment(&patients, "DUP").unwrap_err().0,
             "treatment_ambiguous"
@@ -756,6 +823,12 @@ mod tests {
             match_treatment(&patients, "MISSING").unwrap_err().0,
             "patient_not_found"
         );
+    }
+
+    #[test]
+    fn normalize_patient_code_trims_and_lowercases() {
+        assert_eq!(normalize_patient_code("  HCM2607070269 "), "hcm2607070269");
+        assert_eq!(normalize_patient_code("abc"), "abc");
     }
 
     #[test]

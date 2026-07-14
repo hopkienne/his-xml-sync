@@ -1,6 +1,7 @@
 use crate::{
     app_logger::{self, ExportLogsResult, LogInfo},
     db::AppDb,
+    folder_watch,
     his_api::{self, HisAuthStatus},
     kr800_process::{self, Kr800ProcessState, ProcessResult},
     license::{self, LicenseInfo, LicenseStatus},
@@ -145,8 +146,8 @@ pub fn get_device_folder(
             app_logger::info(
                 "xml_track",
                 &format!(
-                    "get_device_folder ok device={} folder={:?}",
-                    device_key, state.tracking_folder
+                    "get_device_folder ok device={} folder={:?} auto_process={}",
+                    device_key, state.tracking_folder, state.auto_process_enabled
                 ),
             );
             Ok(state)
@@ -158,8 +159,51 @@ pub fn get_device_folder(
     }
 }
 
+/// Bật/tắt tự động xử lý HIS cho KR-800. Khi bật và đã có folder → kick process waiting ngay.
+#[tauri::command]
+pub async fn set_auto_process_enabled(
+    app: AppHandle,
+    db: State<'_, AppDb>,
+    device_key: String,
+    enabled: bool,
+) -> Result<DeviceFolderState, String> {
+    app_logger::info(
+        "xml_track",
+        &format!("set_auto_process_enabled device={device_key} enabled={enabled}"),
+    );
+    let state = match xml_track::set_auto_process_enabled(&db, &device_key, enabled) {
+        Ok(s) => s,
+        Err(err) => {
+            app_logger::error(
+                "xml_track",
+                &format!("set_auto_process_enabled failed: {err}"),
+            );
+            return Err(err);
+        }
+    };
+
+    if enabled {
+        if state
+            .tracking_folder
+            .as_ref()
+            .map(|f| !f.trim().is_empty())
+            .unwrap_or(false)
+        {
+            folder_watch::trigger_auto_process_now(&app).await;
+        } else {
+            app_logger::info(
+                "xml_track",
+                "auto_process bật nhưng chưa có tracking folder — chờ user chọn folder",
+            );
+        }
+    }
+
+    Ok(state)
+}
+
 #[tauri::command]
 pub fn set_tracking_folder_and_scan(
+    app: AppHandle,
     db: State<'_, AppDb>,
     device_key: String,
     folder: String,
@@ -168,15 +212,25 @@ pub fn set_tracking_folder_and_scan(
         "xml_track",
         &format!("set_tracking_folder_and_scan device={device_key} folder={folder}"),
     );
-    match xml_track::set_tracking_folder_and_scan(&db, &device_key, &folder) {
+    match xml_track::set_tracking_folder_and_scan(Some(&app), &db, &device_key, &folder) {
         Ok(result) => {
+            // Nếu user đã bật tự xử lý: kick pipeline sau khi có folder (không chờ poll).
+            if xml_track::is_auto_process_enabled(&db, &device_key) {
+                let app_clone = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    folder_watch::trigger_auto_process_now(&app_clone).await;
+                });
+            }
             app_logger::info(
                 "xml_track",
                 &format!(
-                    "set_tracking_folder_and_scan ok scanned={} inserted={} listed={}",
+                    "set_tracking_folder_and_scan ok scanned={} inserted={} updated={} pruned={} prune_skipped={} tracked={}",
                     result.scanned_count,
                     result.inserted_count,
-                    result.files.len()
+                    result.updated_count,
+                    result.pruned_count,
+                    result.prune_skipped,
+                    result.tracked_count
                 ),
             );
             Ok(result)
@@ -193,6 +247,7 @@ pub fn set_tracking_folder_and_scan(
 
 #[tauri::command]
 pub fn rescan_tracking_folder(
+    app: AppHandle,
     db: State<'_, AppDb>,
     device_key: String,
 ) -> Result<ScanResult, String> {
@@ -200,15 +255,18 @@ pub fn rescan_tracking_folder(
         "xml_track",
         &format!("rescan_tracking_folder device={device_key}"),
     );
-    match xml_track::rescan_tracking_folder(&db, &device_key) {
+    match xml_track::rescan_tracking_folder(Some(&app), &db, &device_key) {
         Ok(result) => {
             app_logger::info(
                 "xml_track",
                 &format!(
-                    "rescan_tracking_folder ok scanned={} inserted={} listed={}",
+                    "rescan_tracking_folder ok scanned={} inserted={} updated={} pruned={} prune_skipped={} tracked={}",
                     result.scanned_count,
                     result.inserted_count,
-                    result.files.len()
+                    result.updated_count,
+                    result.pruned_count,
+                    result.prune_skipped,
+                    result.tracked_count
                 ),
             );
             Ok(result)
@@ -223,13 +281,28 @@ pub fn rescan_tracking_folder(
     }
 }
 
+/// `from_time` / `to_time`: `YYYY-MM-DD HH:mm:ss` — lọc theo `created_at`.
+/// Bắt buộc truyền cả hai từ UI; không truyền → trả mảng rỗng (không load full table).
 #[tauri::command]
 pub fn list_xml_files(
     db: State<'_, AppDb>,
     device_key: String,
+    from_time: Option<String>,
+    to_time: Option<String>,
 ) -> Result<Vec<TrackedXmlFile>, String> {
-    app_logger::debug("xml_track", &format!("list_xml_files device={device_key}"));
-    match xml_track::list_xml_files(&db, &device_key) {
+    app_logger::debug(
+        "xml_track",
+        &format!(
+            "list_xml_files device={device_key} from={:?} to={:?}",
+            from_time, to_time
+        ),
+    );
+    match xml_track::list_xml_files(
+        &db,
+        &device_key,
+        from_time.as_deref(),
+        to_time.as_deref(),
+    ) {
         Ok(files) => {
             app_logger::info(
                 "xml_track",

@@ -54,9 +54,10 @@ fn migrate(conn: &Connection) -> Result<(), String> {
 
         -- Thư mục tracking theo từng máy (vd. kr-800)
         CREATE TABLE IF NOT EXISTS device_config (
-          device_key       TEXT PRIMARY KEY,
-          tracking_folder  TEXT NOT NULL DEFAULT '',
-          updated_at       TEXT NOT NULL
+          device_key            TEXT PRIMARY KEY,
+          tracking_folder       TEXT NOT NULL DEFAULT '',
+          auto_process_enabled  INTEGER NOT NULL DEFAULT 0,
+          updated_at            TEXT NOT NULL
         );
 
         -- File XML đã phát hiện trong folder tracking
@@ -109,10 +110,26 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     migrate_app_config_remove_viet_nga_url(conn)?;
     migrate_app_config_add_ds_co_so_kcb_id(conn)?;
     migrate_app_config_add_copy_refraction(conn)?;
+    migrate_device_config_add_auto_process(conn)?;
     migrate_xml_files_discovered_to_created(conn)?;
     migrate_xml_files_processing_schema(conn)?;
 
     Ok(())
+}
+
+/// DB cũ chưa có cờ tự động xử lý KR-800.
+fn migrate_device_config_add_auto_process(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "device_config")?;
+    if columns
+        .iter()
+        .any(|column| column == "auto_process_enabled")
+    {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE device_config ADD COLUMN auto_process_enabled INTEGER NOT NULL DEFAULT 0;",
+    )
+    .map_err(|error| format!("Thêm auto_process_enabled vào device_config thất bại: {error}"))
 }
 
 /// DB cũ lưu hai URL trùng mục đích. Rebuild bảng để bỏ `viet_nga_url` và giữ dữ liệu.

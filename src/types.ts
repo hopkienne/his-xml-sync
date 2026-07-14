@@ -51,8 +51,14 @@ export type AppSettings = {
   dsCoSoKcbId: number;
   copyRefractionToNewGlasses: boolean;
   username: string;
-  /** Empty on save keeps the previously stored password. */
+  /**
+   * Write: empty keeps the previously stored password; non-empty plain text is
+   * MD5-hashed on the backend before save and used as matKhau on login.
+   * Read: always empty (hash is never returned to the UI).
+   */
   password: string;
+  /** True when a password is already stored (for UI placeholder only). */
+  hasPassword?: boolean;
   updatedAt?: string | null;
 };
 
@@ -98,14 +104,67 @@ export type TrackedXmlFile = {
 export type DeviceFolderState = {
   deviceKey: string;
   trackingFolder?: string | null;
+  /** Bật thì app tự xử lý file waiting lên HIS (không cần bấm Xử lý). */
+  autoProcessEnabled?: boolean;
   updatedAt?: string | null;
 };
 
+/** Kết quả quét folder — không kèm full danh sách file (tránh treo UI với 15k+ bản ghi). */
 export type FolderScanResult = {
   trackingFolder: string;
   scannedCount: number;
   insertedCount: number;
-  files: TrackedXmlFile[];
+  updatedCount: number;
+  prunedCount: number;
+  /** true khi bỏ qua prune vì số file trên disk giảm đột biến. */
+  pruneSkipped: boolean;
+  /** Tổng bản ghi tracking của device sau quét. */
+  trackedCount: number;
+};
+
+/** Event nền: vừa index XML mới. */
+export type Kr800FilesIndexedEvent = {
+  source: string;
+  insertedCount: number;
+  scannedCount: number;
+  trackingFolder: string;
+  inserted: Array<{
+    id: number;
+    fileName: string;
+    filePath: string;
+    createdAt: string;
+  }>;
+};
+
+/** Event nền: vừa auto-process HIS. */
+export type Kr800AutoProcessEvent = {
+  ok: boolean;
+  message: string;
+  fromTime: string;
+  toTime: string;
+  total: number;
+  processed: number;
+  failed: number;
+  skipped: number;
+  busy: boolean;
+};
+
+/** Event nền: trạng thái watcher. */
+export type Kr800WatchStatusEvent = {
+  active: boolean;
+  trackingFolder?: string | null;
+  message: string;
+};
+
+/** Event tiến trình quét folder (chọn folder / Quét lại). */
+export type Kr800ScanProgressEvent = {
+  /** disk | index | prune | done */
+  phase: string;
+  current: number;
+  /** 0 = chưa biết tổng (giai đoạn đọc disk). */
+  total: number;
+  percent: number;
+  message: string;
 };
 
 export type SyncSummary = {

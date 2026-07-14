@@ -1,6 +1,6 @@
 use crate::app_logger;
 use crate::db::AppDb;
-use crate::settings::AppSettings;
+use crate::settings::{self, AppSettings};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::sync::MutexGuard;
@@ -70,11 +70,9 @@ struct LoginData {
 }
 
 /// POST login using credentials from `app_config`, then persist tokens.
+/// `matKhau` is the MD5 hash already stored in `app_config.password` (hashed on save).
 pub async fn login_and_store(db: &AppDb) -> Result<HisAuthStatus, String> {
-    let settings = {
-        let conn = lock_conn(db)?;
-        load_settings_for_login(&conn)?
-    };
+    let settings = settings::load_with_password(db)?;
 
     if settings.his_api_url.trim().is_empty() {
         return Err("Chưa cấu hình API URL HIS. Vào Cấu hình để lưu trước.".into());
@@ -90,6 +88,7 @@ pub async fn login_and_store(db: &AppDb) -> Result<HisAuthStatus, String> {
 
 pub async fn login_with_settings(settings: &AppSettings) -> Result<HisSession, String> {
     let url = join_url(&settings.his_api_url, LOGIN_PATH);
+    // Password in settings is already MD5-hashed when saved from Cấu hình.
     let body = LoginRequestBody {
         tai_khoan: settings.username.trim().to_string(),
         mat_khau: settings.password.clone(),
@@ -299,29 +298,6 @@ pub fn get_access_token(db: &AppDb) -> Result<Option<String>, String> {
         .map_err(|e| format!("Đọc access_token thất bại: {e}"))?;
 
     Ok(token.filter(|t| !t.is_empty()))
-}
-
-fn load_settings_for_login(conn: &Connection) -> Result<AppSettings, String> {
-    conn.query_row(
-        r#"
-        SELECT his_api_url, ds_co_so_kcb_id, copy_refraction_to_new_glasses,
-               username, password, updated_at
-        FROM app_config
-        WHERE id = 1
-        "#,
-        [],
-        |row| {
-            Ok(AppSettings {
-                his_api_url: row.get(0)?,
-                ds_co_so_kcb_id: row.get(1)?,
-                copy_refraction_to_new_glasses: row.get(2)?,
-                username: row.get(3)?,
-                password: row.get(4)?,
-                updated_at: row.get(5)?,
-            })
-        },
-    )
-    .map_err(|e| format!("Đọc cấu hình login thất bại: {e}"))
 }
 
 pub fn join_url(base: &str, path: &str) -> String {

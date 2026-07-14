@@ -1,0 +1,1705 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HIS XML Sync — Luồng hoạt động KR-800 (sau tối ưu)</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --surface-2: #243044;
+      --border: #2d3a4f;
+      --text: #e8eef7;
+      --muted: #93a4bc;
+      --accent: #3b9eff;
+      --accent-soft: rgba(59, 158, 255, 0.12);
+      --good: #3dd68c;
+      --good-soft: rgba(61, 214, 140, 0.12);
+      --warn: #f5a524;
+      --warn-soft: rgba(245, 165, 36, 0.12);
+      --danger: #f31260;
+      --danger-soft: rgba(243, 18, 96, 0.12);
+      --purple: #a78bfa;
+      --radius: 12px;
+      --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+      --mono: "Cascadia Code", "SF Mono", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: radial-gradient(1200px 600px at 10% -10%, #1a3a5c 0%, transparent 50%),
+                  radial-gradient(900px 500px at 100% 0%, #1a2f24 0%, transparent 45%),
+                  var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      font-size: 16px;
+    }
+
+    .wrap {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+
+    header.doc-header {
+      margin-bottom: 2.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.85rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.25rem 0.7rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid rgba(59, 158, 255, 0.25);
+    }
+
+    .badge.good {
+      background: var(--good-soft);
+      color: var(--good);
+      border-color: rgba(61, 214, 140, 0.25);
+    }
+
+    h1 {
+      font-size: clamp(1.6rem, 3vw, 2.1rem);
+      font-weight: 700;
+      margin: 0 0 0.6rem;
+      letter-spacing: -0.02em;
+      line-height: 1.25;
+    }
+
+    .lead {
+      color: var(--muted);
+      font-size: 1.05rem;
+      max-width: 52rem;
+      margin: 0;
+    }
+
+    nav.toc {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.1rem 1.35rem;
+      margin-bottom: 2.5rem;
+      box-shadow: var(--shadow);
+    }
+
+    nav.toc h2 {
+      margin: 0 0 0.65rem;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    nav.toc ol {
+      margin: 0;
+      padding-left: 1.2rem;
+      columns: 2;
+      column-gap: 2rem;
+    }
+
+    @media (max-width: 640px) {
+      nav.toc ol { columns: 1; }
+    }
+
+    nav.toc a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    nav.toc a:hover { text-decoration: underline; }
+    nav.toc li { margin: 0.25rem 0; break-inside: avoid; }
+
+    section {
+      margin-bottom: 2.75rem;
+    }
+
+    h2 {
+      font-size: 1.35rem;
+      margin: 0 0 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+    }
+
+    h2 .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.75rem;
+      height: 1.75rem;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.9rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    h3 {
+      font-size: 1.05rem;
+      margin: 1.4rem 0 0.6rem;
+      color: #c5d4ea;
+    }
+
+    p { margin: 0.6rem 0; color: #d0dae8; }
+    ul, ol { color: #d0dae8; padding-left: 1.3rem; }
+    li { margin: 0.35rem 0; }
+
+    strong { color: #fff; font-weight: 600; }
+    code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      background: var(--surface-2);
+      padding: 0.12em 0.4em;
+      border-radius: 5px;
+      color: #9ecbff;
+    }
+
+    .callout {
+      border-radius: var(--radius);
+      padding: 1rem 1.15rem;
+      margin: 1rem 0;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .callout.ok {
+      background: var(--good-soft);
+      border-color: rgba(61, 214, 140, 0.3);
+    }
+    .callout.ok strong { color: var(--good); }
+
+    .callout.warn {
+      background: var(--warn-soft);
+      border-color: rgba(245, 165, 36, 0.3);
+    }
+    .callout.warn strong { color: var(--warn); }
+
+    .callout.info {
+      background: var(--accent-soft);
+      border-color: rgba(59, 158, 255, 0.3);
+    }
+    .callout.info strong { color: var(--accent); }
+
+    .callout .title {
+      font-weight: 700;
+      margin-bottom: 0.35rem;
+      font-size: 0.95rem;
+    }
+
+    /* Flow diagram */
+    .flow {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin: 1.25rem 0;
+    }
+
+    .flow-step {
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      gap: 0.85rem;
+      position: relative;
+    }
+
+    .flow-step:not(:last-child) .flow-rail::after {
+      content: "";
+      position: absolute;
+      left: 23px;
+      top: 48px;
+      bottom: -4px;
+      width: 2px;
+      background: linear-gradient(to bottom, var(--accent), var(--border));
+      opacity: 0.55;
+    }
+
+    .flow-rail {
+      position: relative;
+      display: flex;
+      justify-content: center;
+      padding-top: 2px;
+    }
+
+    .flow-dot {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.9rem;
+      background: var(--surface-2);
+      border: 2px solid var(--accent);
+      color: var(--accent);
+      z-index: 1;
+      flex-shrink: 0;
+    }
+
+    .flow-dot.disk { border-color: var(--warn); color: var(--warn); }
+    .flow-dot.db { border-color: var(--good); color: var(--good); }
+    .flow-dot.ui { border-color: var(--purple); color: var(--purple); }
+
+    .flow-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.9rem 1.1rem;
+      margin-bottom: 0.85rem;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+    }
+
+    .flow-card h4 {
+      margin: 0 0 0.35rem;
+      font-size: 1rem;
+      font-weight: 650;
+    }
+
+    .flow-card p {
+      margin: 0;
+      font-size: 0.94rem;
+      color: var(--muted);
+    }
+
+    .flow-card .tag {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      margin-bottom: 0.4rem;
+    }
+
+    .tag.disk { background: var(--warn-soft); color: var(--warn); }
+    .tag.db { background: var(--good-soft); color: var(--good); }
+    .tag.ui { background: rgba(167, 139, 250, 0.15); color: var(--purple); }
+    .tag.api { background: var(--accent-soft); color: var(--accent); }
+
+    /* Compare table */
+    table.compare {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      font-size: 0.92rem;
+      background: var(--surface);
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    table.compare th,
+    table.compare td {
+      padding: 0.75rem 0.9rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    table.compare th {
+      background: var(--surface-2);
+      color: #b8c7dc;
+      font-weight: 600;
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    table.compare tr:last-child td { border-bottom: none; }
+    table.compare td.old { color: #f5a0b8; }
+    table.compare td.new { color: #7ddea8; }
+
+    /* Two-col cards */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    @media (max-width: 700px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+
+    .mini-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.15rem;
+    }
+
+    .mini-card h4 {
+      margin: 0 0 0.5rem;
+      font-size: 0.98rem;
+    }
+
+    .mini-card p, .mini-card li {
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    .mini-card ul { margin: 0.4rem 0 0; padding-left: 1.15rem; }
+
+    /* Sequence-ish box */
+    .layers {
+      display: grid;
+      gap: 0.65rem;
+      margin: 1rem 0;
+    }
+
+    .layer {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 0.75rem;
+      align-items: stretch;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .layer-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.8rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 0.75rem;
+      background: var(--surface-2);
+      color: var(--muted);
+      border-right: 1px solid var(--border);
+    }
+
+    .layer-body {
+      padding: 0.75rem 1rem;
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    .layer-body strong { color: var(--text); }
+
+    footer {
+      margin-top: 3rem;
+      padding-top: 1.25rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    kbd {
+      font-family: var(--mono);
+      font-size: 0.82em;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      padding: 0.1em 0.4em;
+      color: var(--text);
+    }
+
+    .qa {
+      border-left: 3px solid var(--accent);
+      padding: 0.15rem 0 0.15rem 1rem;
+      margin: 1.1rem 0;
+    }
+
+    .qa .q {
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 0.35rem;
+    }
+
+    .qa .a { color: var(--muted); margin: 0; }
+
+    /* ========== UI MOCKUP (light theme ≈ app thật) ========== */
+    .ui-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 1rem 0 1.15rem;
+    }
+    .ui-tabs button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 0.4rem 0.9rem;
+      font: inherit;
+      font-size: 0.86rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .ui-tabs button:hover { color: var(--text); border-color: #3b9eff66; }
+    .ui-tabs button.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: rgba(59, 158, 255, 0.4);
+    }
+    .ui-panel { display: none; }
+    .ui-panel.active { display: block; }
+
+    .mock-frame {
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid #c2ced4;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+      background: #eef2f4;
+      color: #15262b;
+      font-family: Inter, "Segoe UI", system-ui, sans-serif;
+    }
+    .mock-chrome {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.55rem 0.85rem;
+      background: #e4eaee;
+      border-bottom: 1px solid #d0d8de;
+    }
+    .mock-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+    }
+    .mock-dot.r { background: #ff5f57; }
+    .mock-dot.y { background: #febc2e; }
+    .mock-dot.g { background: #28c840; }
+    .mock-chrome span {
+      margin-left: 0.5rem;
+      font-size: 0.78rem;
+      color: #5a6b72;
+      font-weight: 600;
+    }
+
+    .mock-app {
+      display: grid;
+      grid-template-columns: 200px 1fr;
+      min-height: 520px;
+    }
+    @media (max-width: 720px) {
+      .mock-app { grid-template-columns: 1fr; }
+      .mock-sidebar { display: none; }
+    }
+
+    .mock-sidebar {
+      background: #f4f5f6;
+      border-right: 1px solid #e2e5e8;
+      padding: 1rem 0.75rem;
+    }
+    .mock-brand {
+      font-weight: 700;
+      font-size: 0.82rem;
+      color: #0a5f56;
+      margin: 0 0.4rem 1rem;
+    }
+    .mock-nav-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #6b7780;
+      margin: 0.85rem 0.4rem 0.35rem;
+      font-weight: 700;
+    }
+    .mock-nav-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      padding: 0.55rem 0.65rem;
+      border-radius: 6px;
+      font-size: 0.88rem;
+      color: #1c2529;
+      margin-bottom: 0.2rem;
+    }
+    .mock-nav-item.active {
+      background: #ddeee9;
+      color: #0a5f56;
+      font-weight: 650;
+    }
+
+    .mock-main { display: flex; flex-direction: column; min-width: 0; }
+    .mock-topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+      padding: 1rem 1.15rem 0.85rem;
+      border-bottom: 1px solid #e2e5e8;
+      background: #fff;
+    }
+    .mock-topbar h3 {
+      margin: 0;
+      font-size: 1.15rem;
+      color: #15262b;
+    }
+    .mock-topbar p {
+      margin: 0.2rem 0 0;
+      font-size: 0.8rem;
+      color: #5a6b72;
+      max-width: 28rem;
+    }
+    .mock-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.4rem 0.7rem;
+      border-radius: 999px;
+      border: 1px solid #dde4e8;
+      background: #f7fafb;
+      font-size: 0.75rem;
+      color: #5a6b72;
+      white-space: nowrap;
+    }
+    .mock-pill .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #1a7f4b;
+    }
+    .mock-pill .dot.warn { background: #b7791f; }
+    .mock-work {
+      padding: 0.9rem 1rem 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      background: #eef2f4;
+    }
+    .mock-card {
+      background: #fff;
+      border: 1px solid #dde4e8;
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(15,42,46,0.04), 0 4px 14px rgba(15,42,46,0.05);
+      overflow: hidden;
+    }
+    .mock-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.7rem 0.9rem;
+      border-bottom: 1px solid #edf1f3;
+    }
+    .mock-card-head .title {
+      font-weight: 700;
+      font-size: 0.92rem;
+      color: #15262b;
+    }
+    .mock-card-head .path-sum {
+      display: block;
+      font-size: 0.75rem;
+      color: #83949b;
+      font-weight: 500;
+      margin-top: 0.1rem;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .mock-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+    .mock-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      border-radius: 6px;
+      border: 1px solid #c2ced4;
+      background: #fff;
+      color: #15262b;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.38rem 0.7rem;
+    }
+    .mock-btn.primary {
+      background: #0d8a7f;
+      border-color: #0d8a7f;
+      color: #fff;
+    }
+    .mock-btn:disabled, .mock-btn.disabled {
+      opacity: 0.55;
+    }
+    .mock-btn .spin {
+      display: inline-block;
+      animation: mock-spin 0.9s linear infinite;
+    }
+    @keyframes mock-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .mock-card-body { padding: 0.85rem 0.95rem 1rem; }
+    .mock-lead {
+      margin: 0 0 0.7rem;
+      font-size: 0.8rem;
+      color: #5a6b72;
+      line-height: 1.45;
+    }
+    .mock-path-box {
+      background: #f7fafb;
+      border: 1px solid #e2e8eb;
+      border-radius: 6px;
+      padding: 0.55rem 0.7rem;
+      margin-bottom: 0.65rem;
+    }
+    .mock-path-box span {
+      display: block;
+      font-size: 0.72rem;
+      color: #83949b;
+      margin-bottom: 0.15rem;
+    }
+    .mock-path-box strong {
+      font-size: 0.84rem;
+      color: #15262b;
+      word-break: break-all;
+    }
+    .mock-watch-on {
+      margin: 0 0 0.65rem;
+      font-size: 0.8rem;
+      font-weight: 650;
+      color: #1a7f4b;
+    }
+    .mock-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-bottom: 0.65rem;
+    }
+    .mock-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.28rem 0.55rem;
+      border-radius: 999px;
+      background: #edf2f4;
+      border: 1px solid #dde4e8;
+      font-size: 0.75rem;
+      color: #5a6b72;
+    }
+    .mock-chip strong { color: #15262b; }
+
+    .mock-scan {
+      margin-top: 0.15rem;
+      padding: 0.7rem 0.75rem;
+      border-radius: 10px;
+      border: 1px solid #dde4e8;
+      background: #f4f7fb;
+    }
+    .mock-scan__meta {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.78rem;
+      color: #5a6b72;
+      line-height: 1.4;
+    }
+    .mock-scan__meta strong {
+      color: #15262b;
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .mock-scan__track {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.08);
+      overflow: hidden;
+    }
+    .mock-scan__fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #2f80ed, #56ccf2);
+    }
+    .mock-scan__track.is-indet .mock-scan__fill {
+      width: 40%;
+      animation: mock-indet 1.1s ease-in-out infinite;
+    }
+    @keyframes mock-indet {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(280%); }
+    }
+    .mock-status-msg {
+      margin: 0.55rem 0 0;
+      font-size: 0.78rem;
+      color: #5a6b72;
+    }
+
+    .mock-table-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.65rem;
+      padding: 0.7rem 0.9rem;
+      border-bottom: 1px solid #edf1f3;
+    }
+    .mock-table-head h4 {
+      margin: 0;
+      font-size: 0.95rem;
+    }
+    .mock-range {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      font-size: 0.78rem;
+      color: #5a6b72;
+    }
+    .mock-range input {
+      border: 1px solid #c2ced4;
+      border-radius: 6px;
+      padding: 0.3rem 0.4rem;
+      font: inherit;
+      font-size: 0.78rem;
+      color: #15262b;
+      background: #fff;
+    }
+    .mock-table-wrap { overflow-x: auto; }
+    .mock-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.78rem;
+    }
+    .mock-table th {
+      text-align: left;
+      padding: 0.55rem 0.7rem;
+      background: #f7fafb;
+      color: #5a6b72;
+      font-weight: 650;
+      border-bottom: 1px solid #e2e5e8;
+      white-space: nowrap;
+    }
+    .mock-table td {
+      padding: 0.55rem 0.7rem;
+      border-bottom: 1px solid #eef1f3;
+      color: #15262b;
+      vertical-align: middle;
+    }
+    .mock-table tr:last-child td { border-bottom: 0; }
+    .mock-table .empty {
+      text-align: center;
+      color: #5a6b72;
+      padding: 1.4rem 0.75rem;
+    }
+    .mock-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 650;
+    }
+    .mock-badge.wait { background: #fff8eb; color: #b7791f; border: 1px solid #f0d9a0; }
+    .mock-badge.ok { background: #e9f7ef; color: #1a7f4b; border: 1px solid #b9e4cb; }
+    .mock-badge.err { background: #fdf0ef; color: #c0352b; border: 1px solid #f0c4c0; }
+    .mock-badge.run { background: #eff4ff; color: #2563eb; border: 1px solid #c7d7fe; }
+    .mock-file { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.72rem; }
+    .mock-callout-note {
+      margin-top: 0.85rem;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+    .mock-callout-note code { font-size: 0.85em; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="doc-header">
+      <div class="badge-row">
+        <span class="badge">HIS XML Sync</span>
+        <span class="badge">KR-800</span>
+        <span class="badge good">Tối ưu list theo ngày tạo</span>
+        <span class="badge good">Tự quét nền + tự xử lý</span>
+      </div>
+      <h1>Luồng hoạt động sau khi tối ưu</h1>
+      <p class="lead">
+        Tài liệu mô tả cách app theo dõi folder XML, lưu index vào SQLite, chỉ hiển thị
+        / xử lý file theo <strong>ngày tạo file</strong> (<code>created_at</code>) —
+        <strong>không load 15.000 file lên giao diện</strong>.
+        Khi đã chọn folder: app <strong>tự quét nền</strong> (chỉ insert file mới) và
+        <strong>tự xử lý HIS</strong> các file <code>waiting</code>.
+      </p>
+    </header>
+
+    <nav class="toc" aria-label="Mục lục">
+      <h2>Mục lục</h2>
+      <ol>
+        <li><a href="#ui-mockup">Giao diện UI (mockup)</a></li>
+        <li><a href="#tl-dr">Tóm tắt nhanh (TL;DR)</a></li>
+        <li><a href="#kien-truc">Hai tầng: Disk index vs UI list</a></li>
+        <li><a href="#luong-chinh">Luồng chính end-to-end</a></li>
+        <li><a href="#chon-folder">Khi chọn folder / Quét lại</a></li>
+        <li><a href="#loc-ngay">Lọc theo ngày tạo</a></li>
+        <li><a href="#xu-ly">Luồng «Xử lý» gửi HIS</a></li>
+        <li><a href="#truoc-sau">Trước vs sau tối ưu</a></li>
+        <li><a href="#faq">Câu hỏi thường gặp</a></li>
+      </ol>
+    </nav>
+
+    <!-- UI MOCKUP -->
+    <section id="ui-mockup">
+      <h2><span class="num">UI</span> Giao diện màn KR-800 (mockup)</h2>
+      <p>
+        Phác thảo theo design system app (nền xám nhạt, sidebar teal, card trắng).
+        Bấm tab để xem các trạng thái đã triển khai: idle + auto-watch, đang quét (progress),
+        và bảng file theo ngày tạo.
+      </p>
+
+      <div class="ui-tabs" role="tablist" aria-label="Trạng thái UI">
+        <button type="button" class="active" data-ui-tab="idle" role="tab" aria-selected="true">1. Bình thường + auto-watch</button>
+        <button type="button" data-ui-tab="disk" role="tab" aria-selected="false">2. Đang quét — đọc disk</button>
+        <button type="button" data-ui-tab="index" role="tab" aria-selected="false">3. Đang quét — index SQLite</button>
+        <button type="button" data-ui-tab="table" role="tab" aria-selected="false">4. Danh sách theo ngày tạo</button>
+      </div>
+
+      <!-- STATE: idle -->
+      <div class="ui-panel active" id="ui-idle" role="tabpanel">
+        <div class="mock-frame" aria-label="Mockup màn KR-800 — idle">
+          <div class="mock-chrome">
+            <span class="mock-dot r"></span><span class="mock-dot y"></span><span class="mock-dot g"></span>
+            <span>HIS XML Sync — KR-800</span>
+          </div>
+          <div class="mock-app">
+            <aside class="mock-sidebar">
+              <div class="mock-brand">HIS XML Sync</div>
+              <div class="mock-nav-label">Thiết bị</div>
+              <div class="mock-nav-item active">KR-800</div>
+              <div class="mock-nav-label">Hệ thống</div>
+              <div class="mock-nav-item">Cấu hình</div>
+            </aside>
+            <div class="mock-main">
+              <header class="mock-topbar">
+                <div>
+                  <h3>KR-800</h3>
+                  <p>Máy đo khúc xạ TOPCON KR-800 — theo dõi folder XML và trạng thái file</p>
+                </div>
+                <div class="mock-pill"><span class="dot"></span> HIS: Đỗ Thị Huyền</div>
+              </header>
+              <div class="mock-work">
+                <div class="mock-card">
+                  <div class="mock-card-head">
+                    <div>
+                      <div class="title">▾ Thư mục tracking</div>
+                    </div>
+                    <div class="mock-actions">
+                      <span class="mock-btn">↻ Quét lại</span>
+                      <span class="mock-btn primary">📁 Chọn thư mục</span>
+                    </div>
+                  </div>
+                  <div class="mock-card-body">
+                    <p class="mock-lead">
+                      App <strong>tự quét nền</strong> khi có file mới (chỉ insert path chưa có);
+                      danh sách dưới chỉ tải theo <strong>ngày tạo</strong>. File waiting được
+                      <strong>tự xử lý HIS</strong> nếu đã cấu hình.
+                    </p>
+                    <div class="mock-path-box">
+                      <span>Đường dẫn đang theo dõi</span>
+                      <strong>D:\DATA_PACS\KR800</strong>
+                    </div>
+                    <p class="mock-watch-on">● Tự động theo dõi: BẬT — quét nền + tự xử lý file chờ</p>
+                    <div class="mock-chips">
+                      <span class="mock-chip">Theo ngày tạo <strong>12</strong></span>
+                      <span class="mock-chip">Chờ <strong>2</strong></span>
+                      <span class="mock-chip">Đang xử lý <strong>0</strong></span>
+                      <span class="mock-chip">Đã xử lý <strong>9</strong></span>
+                      <span class="mock-chip">Thất bại <strong>1</strong></span>
+                    </div>
+                    <p class="mock-status-msg">Tự phát hiện 1 file XML mới (watcher). Đang làm mới danh sách…</p>
+                  </div>
+                </div>
+                <div class="mock-card">
+                  <div class="mock-table-head">
+                    <h4>Danh sách file XML</h4>
+                    <div class="mock-range">
+                      <span>Ngày xử lý</span>
+                      <input type="text" value="2026-07-14 00:00" readonly />
+                      <span>→</span>
+                      <input type="text" value="2026-07-14 23:59" readonly />
+                      <span class="mock-btn primary">▶ Xử lý</span>
+                    </div>
+                  </div>
+                  <div class="mock-table-wrap">
+                    <table class="mock-table">
+                      <thead>
+                        <tr>
+                          <th>Tên file</th><th>Kích thước</th><th>Trạng thái</th><th>Ngày tạo</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td class="mock-file">HCM…_20260714_173000_…xml</td>
+                          <td>48 KB</td>
+                          <td><span class="mock-badge wait">Chờ xử lý</span></td>
+                          <td>14/07/2026 17:30</td>
+                        </tr>
+                        <tr>
+                          <td class="mock-file">HCM…_20260714_151200_…xml</td>
+                          <td>47 KB</td>
+                          <td><span class="mock-badge ok">Đã xử lý</span></td>
+                          <td>14/07/2026 15:12</td>
+                        </tr>
+                        <tr>
+                          <td class="mock-file">VN…_20260714_142000_…xml</td>
+                          <td>46 KB</td>
+                          <td><span class="mock-badge err">Không tìm thấy BN</span></td>
+                          <td>14/07/2026 14:20</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="mock-callout-note">
+          <strong>Idle:</strong> folder đã chọn, auto-watch bật (xanh), chips đếm theo khoảng ngày,
+          bảng chỉ ~file trong ngày — không load 15k.
+        </p>
+      </div>
+
+      <!-- STATE: disk scan -->
+      <div class="ui-panel" id="ui-disk" role="tabpanel" hidden>
+        <div class="mock-frame" aria-label="Mockup — quét disk">
+          <div class="mock-chrome">
+            <span class="mock-dot r"></span><span class="mock-dot y"></span><span class="mock-dot g"></span>
+            <span>HIS XML Sync — đang quét folder lần đầu</span>
+          </div>
+          <div class="mock-app">
+            <aside class="mock-sidebar">
+              <div class="mock-brand">HIS XML Sync</div>
+              <div class="mock-nav-label">Thiết bị</div>
+              <div class="mock-nav-item active">KR-800</div>
+              <div class="mock-nav-label">Hệ thống</div>
+              <div class="mock-nav-item">Cấu hình</div>
+            </aside>
+            <div class="mock-main">
+              <header class="mock-topbar">
+                <div>
+                  <h3>KR-800</h3>
+                  <p>Máy đo khúc xạ TOPCON KR-800 — theo dõi folder XML và trạng thái file</p>
+                </div>
+                <div class="mock-pill"><span class="dot warn"></span> HIS: đã login</div>
+              </header>
+              <div class="mock-work">
+                <div class="mock-card">
+                  <div class="mock-card-head">
+                    <div class="title">▾ Thư mục tracking</div>
+                    <div class="mock-actions">
+                      <span class="mock-btn disabled"><span class="spin">↻</span> Quét lại</span>
+                      <span class="mock-btn primary disabled">📁 Chọn thư mục</span>
+                    </div>
+                  </div>
+                  <div class="mock-card-body">
+                    <div class="mock-path-box">
+                      <span>Đường dẫn đang theo dõi</span>
+                      <strong>D:\DATA_PACS\KR800</strong>
+                    </div>
+                    <div class="mock-scan">
+                      <div class="mock-scan__meta">
+                        <strong>Đọc disk</strong>
+                        <span>Đang đọc disk… 3 240 file XML (đã duyệt 48 500 mục)</span>
+                      </div>
+                      <div class="mock-scan__track is-indet">
+                        <div class="mock-scan__fill"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="mock-card">
+                  <div class="mock-table-head">
+                    <h4>Danh sách file XML</h4>
+                    <span class="mock-btn primary disabled">▶ Xử lý</span>
+                  </div>
+                  <div class="mock-table-wrap">
+                    <table class="mock-table">
+                      <tbody>
+                        <tr>
+                          <td class="empty">
+                            Đang đọc disk… 3 240 file XML (đã duyệt 48 500 mục)<br />
+                            <span style="color:#83949b;font-size:0.85em">phase = disk · total chưa biết → thanh indeterminate</span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="mock-callout-note">
+          Event <code>kr800:scan-progress</code> phase=<code>disk</code>:
+          <code>current</code> = số XML đã thấy, <code>total=0</code> → animation indeterminate.
+          Nút bị khóa, icon Quét lại xoay.
+        </p>
+      </div>
+
+      <!-- STATE: index -->
+      <div class="ui-panel" id="ui-index" role="tabpanel" hidden>
+        <div class="mock-frame" aria-label="Mockup — index SQLite">
+          <div class="mock-chrome">
+            <span class="mock-dot r"></span><span class="mock-dot y"></span><span class="mock-dot g"></span>
+            <span>HIS XML Sync — index vào SQLite</span>
+          </div>
+          <div class="mock-app">
+            <aside class="mock-sidebar">
+              <div class="mock-brand">HIS XML Sync</div>
+              <div class="mock-nav-label">Thiết bị</div>
+              <div class="mock-nav-item active">KR-800</div>
+              <div class="mock-nav-label">Hệ thống</div>
+              <div class="mock-nav-item">Cấu hình</div>
+            </aside>
+            <div class="mock-main">
+              <header class="mock-topbar">
+                <div>
+                  <h3>KR-800</h3>
+                  <p>Máy đo khúc xạ TOPCON KR-800 — theo dõi folder XML và trạng thái file</p>
+                </div>
+                <div class="mock-pill"><span class="dot"></span> HIS: đã login</div>
+              </header>
+              <div class="mock-work">
+                <div class="mock-card">
+                  <div class="mock-card-head">
+                    <div>
+                      <div class="title">▸ Thư mục tracking</div>
+                      <span class="path-sum">D:\DATA_PACS\KR800</span>
+                    </div>
+                    <div class="mock-actions">
+                      <span class="mock-btn disabled"><span class="spin">↻</span> Quét lại</span>
+                      <span class="mock-btn primary disabled">📁 Chọn thư mục</span>
+                    </div>
+                  </div>
+                  <div class="mock-card-body" style="padding-top:0.55rem">
+                    <!-- collapsed compact progress -->
+                    <div class="mock-scan" style="margin-bottom:0.55rem">
+                      <div class="mock-scan__meta">
+                        <strong>Ghi SQLite</strong>
+                        <span>Đang index 8 420/15 455 file XML… — 8 420/15 455 (54%)</span>
+                      </div>
+                      <div class="mock-scan__track">
+                        <div class="mock-scan__fill" style="width:54%"></div>
+                      </div>
+                    </div>
+                    <div class="mock-chips">
+                      <span class="mock-chip">Theo ngày tạo <strong>—</strong></span>
+                      <span class="mock-chip">Chờ <strong>—</strong></span>
+                      <span class="mock-chip">Lỗi <strong>—</strong></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="mock-card">
+                  <div class="mock-table-wrap">
+                    <table class="mock-table">
+                      <tbody>
+                        <tr>
+                          <td class="empty">
+                            Đang index 8 420/15 455 file XML…<br />
+                            <span style="color:#83949b;font-size:0.85em">8 420/15 455 (54%) · phase = index</span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="mock-callout-note">
+          Phase <code>index</code>: đã biết tổng XML → <strong>thanh % thật</strong> +
+          <code>current/total</code>. Progress vẫn hiện khi section tracking <em>thu gọn</em> (compact).
+        </p>
+      </div>
+
+      <!-- STATE: table after scan -->
+      <div class="ui-panel" id="ui-table" role="tabpanel" hidden>
+        <div class="mock-frame" aria-label="Mockup — sau quét, list theo ngày">
+          <div class="mock-chrome">
+            <span class="mock-dot r"></span><span class="mock-dot y"></span><span class="mock-dot g"></span>
+            <span>HIS XML Sync — sau quét xong</span>
+          </div>
+          <div class="mock-app">
+            <aside class="mock-sidebar">
+              <div class="mock-brand">HIS XML Sync</div>
+              <div class="mock-nav-label">Thiết bị</div>
+              <div class="mock-nav-item active">KR-800</div>
+              <div class="mock-nav-label">Hệ thống</div>
+              <div class="mock-nav-item">Cấu hình</div>
+            </aside>
+            <div class="mock-main">
+              <header class="mock-topbar">
+                <div>
+                  <h3>KR-800</h3>
+                  <p>Máy đo khúc xạ TOPCON KR-800 — theo dõi folder XML và trạng thái file</p>
+                </div>
+                <div class="mock-pill"><span class="dot"></span> HIS: Đỗ Thị Huyền</div>
+              </header>
+              <div class="mock-work">
+                <div class="mock-card">
+                  <div class="mock-card-head">
+                    <div class="title">▾ Thư mục tracking</div>
+                    <div class="mock-actions">
+                      <span class="mock-btn">↻ Quét lại</span>
+                      <span class="mock-btn primary">📁 Chọn thư mục</span>
+                    </div>
+                  </div>
+                  <div class="mock-card-body">
+                    <div class="mock-path-box">
+                      <span>Đường dẫn đang theo dõi</span>
+                      <strong>D:\DATA_PACS\KR800</strong>
+                    </div>
+                    <p class="mock-watch-on">● Tự động theo dõi: BẬT — quét nền + tự xử lý file chờ</p>
+                    <div class="mock-chips">
+                      <span class="mock-chip">Theo ngày tạo <strong>4</strong></span>
+                      <span class="mock-chip">Chờ <strong>1</strong></span>
+                      <span class="mock-chip">Đang xử lý <strong>1</strong></span>
+                      <span class="mock-chip">Đã xử lý <strong>1</strong></span>
+                      <span class="mock-chip">Thất bại <strong>1</strong></span>
+                    </div>
+                    <p class="mock-status-msg">
+                      Đã quét thư mục: quét 15 455 file XML, thêm mới 15 455, cập nhật 0, tổng theo dõi 15 455.
+                    </p>
+                  </div>
+                </div>
+                <div class="mock-card">
+                  <div class="mock-table-head">
+                    <h4>Danh sách file XML</h4>
+                    <div class="mock-range">
+                      <span>Ngày xử lý</span>
+                      <input type="text" value="2026-07-14T00:00" readonly title="datetime-local" />
+                      <span>→</span>
+                      <input type="text" value="2026-07-14T23:59" readonly />
+                      <span class="mock-btn primary">▶ Xử lý</span>
+                    </div>
+                  </div>
+                  <div class="mock-table-wrap">
+                    <table class="mock-table">
+                      <thead>
+                        <tr>
+                          <th>Tên file</th>
+                          <th>Kích thước</th>
+                          <th>Trạng thái</th>
+                          <th>Ngày tạo</th>
+                          <th>Ngày cập nhật</th>
+                          <th>Lỗi</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td class="mock-file" title="full path">HCM2607140199_20260714_173000_TOPCON_KR-800.xml</td>
+                          <td>48 KB</td>
+                          <td><span class="mock-badge wait">Chờ xử lý</span></td>
+                          <td>14/07/2026 17:30</td>
+                          <td>14/07/2026 17:40</td>
+                          <td>—</td>
+                        </tr>
+                        <tr>
+                          <td class="mock-file">HCM2607140188_20260714_161500_TOPCON_KR-800.xml</td>
+                          <td>47 KB</td>
+                          <td><span class="mock-badge run">⟳ Đang xử lý</span></td>
+                          <td>14/07/2026 16:15</td>
+                          <td>14/07/2026 17:41</td>
+                          <td>—</td>
+                        </tr>
+                        <tr>
+                          <td class="mock-file">HCM2607140150_20260714_145000_TOPCON_KR-800.xml</td>
+                          <td>49 KB</td>
+                          <td><span class="mock-badge ok">Đã xử lý</span></td>
+                          <td>14/07/2026 14:50</td>
+                          <td>14/07/2026 17:41</td>
+                          <td>—</td>
+                        </tr>
+                        <tr>
+                          <td class="mock-file">VN2606003595_20260714_112200_TOPCON_KR-800.xml</td>
+                          <td>46 KB</td>
+                          <td><span class="mock-badge err">Không tìm thấy BN</span></td>
+                          <td>14/07/2026 11:22</td>
+                          <td>14/07/2026 17:42</td>
+                          <td style="color:#c0352b;max-width:160px">Không tìm thấy bệnh nhân…</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="mock-callout-note">
+          Sau scan: summary status (15 455 index trong DB) nhưng bảng chỉ
+          <code>list_xml_files(from, to)</code> theo «Ngày xử lý» — ví dụ 4 dòng hôm nay.
+          Auto-process có thể đổi status waiting → đang xử lý / đã xử lý / lỗi.
+        </p>
+      </div>
+    </section>
+
+    <!-- 1 -->
+    <section id="tl-dr">
+      <h2><span class="num">1</span> Tóm tắt nhanh (TL;DR)</h2>
+
+      <div class="callout ok">
+        <div class="title">Có — lọc theo ngày + tự quét nền + tự xử lý file mới</div>
+        <p style="margin:0;color:var(--muted)">
+          Chọn folder → index SQLite → UI chỉ query theo khoảng ngày tạo.
+          Sau đó app <strong>tự theo dõi folder</strong> (FS watcher + poll ~20s): chỉ
+          <strong>INSERT file XML mới</strong>, UI tự refresh theo khoảng ngày đang chọn,
+          và <strong>tự gửi HIS</strong> các file <code>waiting</code> (cần đã cấu hình HIS).
+          Không cần bấm «Quét lại» / «Xử lý» cho luồng thường ngày.
+        </p>
+      </div>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>✅ UI / bảng danh sách</h4>
+          <ul>
+            <li>Chỉ load file theo khoảng <strong>ngày tạo</strong></li>
+            <li>Đổi khoảng ngày → query lại SQLite (nhanh)</li>
+            <li>Tự refresh khi có file mới / auto-process xong</li>
+          </ul>
+        </div>
+        <div class="mini-card">
+          <h4>✅ Background (tự động)</h4>
+          <ul>
+            <li><code>notify</code> watcher + poll 20s</li>
+            <li>Chỉ insert path chưa có trong DB</li>
+            <li>Auto-process waiting (cả ngày của file mới / hôm nay)</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section id="kien-truc">
+      <h2><span class="num">2</span> Hai tầng: Disk index vs UI list</h2>
+      <p>
+        Hiểu rõ hai tầng này sẽ tránh nhầm: “không load 15k lên UI” <strong>không có nghĩa</strong>
+        là bỏ quét folder. App tách thành:
+      </p>
+
+      <div class="layers">
+        <div class="layer">
+          <div class="layer-label">Disk</div>
+          <div class="layer-body">
+            Thư mục tracking, ví dụ <code>D:\DATA_PACS\KR800</code>.
+            Máy KR-800 xuất file <code>*.xml</code> vào đây (folder có thể lẫn file khác của PACS).
+          </div>
+        </div>
+        <div class="layer">
+          <div class="layer-label">SQLite</div>
+          <div class="layer-body">
+            Bảng <code>xml_files</code> = <strong>index</strong> các file đã biết:
+            path, size, status, <code>created_at</code> (parse từ tên file
+            <code>…_YYYYMMDD_HHMMSS_…</code>). Có thể có hàng chục nghìn bản ghi.
+          </div>
+        </div>
+        <div class="layer">
+          <div class="layer-label">UI</div>
+          <div class="layer-body">
+            Chỉ <code>SELECT … WHERE created_at BETWEEN from AND to</code> theo khoảng
+            “Ngày xử lý” trên màn KR-800. Render bảng từ kết quả đã lọc.
+          </div>
+        </div>
+        <div class="layer">
+          <div class="layer-label">HIS API</div>
+          <div class="layer-body">
+            Nút <strong>Xử lý</strong> chỉ lấy file <code>status = waiting</code>
+            trong cùng khoảng ngày tạo, gửi kết quả đo về HIS.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 -->
+    <section id="luong-chinh">
+      <h2><span class="num">3</span> Luồng chính end-to-end</h2>
+
+      <div class="flow">
+        <div class="flow-step">
+          <div class="flow-rail"><div class="flow-dot">1</div></div>
+          <div class="flow-card">
+            <span class="tag ui">UI</span>
+            <h4>Mở màn KR-800</h4>
+            <p>
+              App đọc khoảng ngày đã lưu (hoặc mặc định <strong>hôm nay</strong>),
+              gọi <code>list_xml_files(from, to)</code> → hiện bảng theo ngày tạo.
+              Chưa có folder thì bảng trống, nhắc chọn thư mục.
+            </p>
+          </div>
+        </div>
+
+        <div class="flow-step">
+          <div class="flow-rail"><div class="flow-dot">2</div></div>
+          <div class="flow-card">
+            <span class="tag ui">UI</span>
+            <h4>Cấu hình HIS (nếu chưa)</h4>
+            <p>
+              Vào <strong>Cấu hình</strong>: API URL, tài khoản, đăng nhập HIS, lưu token.
+              Cần có token trước khi bấm Xử lý.
+            </p>
+          </div>
+        </div>
+
+        <div class="flow-step">
+          <div class="flow-rail"><div class="flow-dot disk">3</div></div>
+          <div class="flow-card">
+            <span class="tag disk">Disk + DB</span>
+            <h4>Chọn thư mục tracking</h4>
+            <p>
+              Backend quét <code>*.xml</code> trên disk, upsert vào SQLite (index).
+              <strong>Không</strong> trả full danh sách 15k về UI.
+              Xong scan → UI reload list <em>theo khoảng ngày đang chọn</em>.
+            </p>
+          </div>
+        </div>
+
+        <div class="flow-step">
+          <div class="flow-rail"><div class="flow-dot ui">4</div></div>
+          <div class="flow-card">
+            <span class="tag ui">UI</span>
+            <h4>Chỉnh khoảng «Ngày xử lý»</h4>
+            <p>
+              Đổi Từ / Đến (datetime) → app query lại SQLite theo
+              <code>created_at</code>. Bảng cập nhật ngay; <strong>không cần quét lại folder</strong>.
+            </p>
+          </div>
+        </div>
+
+        <div class="flow-step">
+          <div class="flow-rail"><div class="flow-dot disk">5</div></div>
+          <div class="flow-card">
+            <span class="tag disk">Tự động</span>
+            <h4>File XML mới xuất ra folder</h4>
+            <p>
+              Watcher / poll phát hiện → <strong>chỉ INSERT</strong> path chưa có
+              (<code>status = waiting</code>) → event <code>kr800:files-indexed</code>
+              → UI refresh theo khoảng ngày đang chọn.
+            </p>
+          </div>
+        </div>
+
+        <div class="flow-step">
+          <div class="flow-rail"><div class="flow-dot">6</div></div>
+          <div class="flow-card">
+            <span class="tag api">HIS · tự động</span>
+            <h4>Tự xử lý file waiting</h4>
+            <p>
+              Backend gọi pipeline process (cùng logic nút «Xử lý») cho khoảng ngày của batch mới
+              (00:00–23:59). Match BN → map → gửi HIS. Event
+              <code>kr800:auto-process</code> + <code>kr800:file-progress</code> cập nhật UI.
+              Nút «Xử lý» vẫn dùng được khi muốn chạy tay.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section id="chon-folder">
+      <h2><span class="num">4</span> Khi chọn folder / Quét lại — chi tiết backend</h2>
+
+      <h3>4.1. Chọn thư mục</h3>
+      <ol>
+        <li>User bấm <kbd>Chọn thư mục</kbd> → native folder picker.</li>
+        <li>Command <code>set_tracking_folder_and_scan</code>:
+          <ul>
+            <li>Lưu path vào <code>device_config</code>.</li>
+            <li><code>read_dir</code> folder, lấy mọi file <code>.xml</code>.</li>
+            <li>Parse <code>created_at</code> từ tên file (vd. <code>…_20260714_173000_…</code> → <code>2026-07-14 17:30:00</code>).</li>
+            <li>Load map path hiện có trong DB <strong>một lần</strong>.</li>
+            <li>File mới → <code>INSERT</code> (<code>status = waiting</code>).</li>
+            <li>File đã có, metadata đổi → <code>UPDATE</code> (giữ nguyên status xử lý).</li>
+            <li>File không còn trên disk → prune (có <strong>bảo vệ</strong> nếu giảm đột biến).</li>
+          </ul>
+        </li>
+        <li>Trả về <em>summary</em> (số quét / thêm / cập nhật / gỡ / tổng tracked) — <strong>không kèm mảng files</strong>.</li>
+        <li>UI gọi <code>list_xml_files(from, to)</code> với khoảng ngày hiện tại → vẽ bảng.</li>
+      </ol>
+
+      <h3>4.2. Quét lại</h3>
+      <p>
+        <code>rescan_tracking_folder</code> = bước quét giống trên, dùng lại folder đã lưu.
+        Có khóa chống spam: không gọi chồng khi đang scan.
+      </p>
+
+      <div class="callout warn">
+        <div class="title">Lưu ý về thời gian quét disk</div>
+        <p style="margin:0;color:var(--muted)">
+          Nếu folder PACS chứa <em>rất nhiều</em> file không phải XML, lần quét vẫn có thể mất thời gian
+          vì phải duyệt disk. Đó là chi phí index, không phải chi phí render 15k dòng trên UI.
+          Nên để XML KR-800 ở thư mục chuyên biệt nếu có thể.
+        </p>
+      </div>
+
+      <h3>4.3. Bảo vệ prune (tránh mất index)</h3>
+      <ul>
+        <li>Disk thấy 0 XML nhưng DB còn bản ghi → <strong>không xóa</strong>.</li>
+        <li>Sắp xóa &gt; 50 bản ghi <em>và</em> &gt; 10% tổng → <strong>bỏ qua prune</strong>, báo
+          <code>pruneSkipped</code> trên UI (tránh case 15 464 → 2 như log máy thật).</li>
+      </ul>
+    </section>
+
+    <!-- 5 -->
+    <section id="loc-ngay">
+      <h2><span class="num">5</span> Lọc theo ngày tạo — trả lời trực tiếp</h2>
+
+      <div class="qa">
+        <div class="q">Có thể lọc file theo ngày ngay khi chọn folder không?</div>
+        <p class="a">
+          <strong>Có.</strong> Ngay sau khi scan xong, app không đẩy 15k file lên màn hình.
+          Nó dùng đúng khoảng «Ngày xử lý» đang hiển thị (mặc định hôm nay) để
+          <code>SELECT</code> từ SQLite. Bạn thấy ngay các file có ngày tạo trong khoảng đó.
+        </p>
+      </div>
+
+      <div class="qa">
+        <div class="q">Không cần load 15k file?</div>
+        <p class="a">
+          <strong>Đúng với tầng UI.</strong> React state / bảng chỉ chứa file trong khoảng ngày.
+          Tầng SQLite vẫn có thể index toàn bộ XML đã quét (để lần sau đổi ngày hoặc xử lý
+          ngày khác không phải quét disk lại).
+        </p>
+      </div>
+
+      <div class="qa">
+        <div class="q">Đổi ngày có phải quét folder lại không?</div>
+        <p class="a">
+          <strong>Không.</strong> Chỉ query DB theo <code>created_at</code>. Chỉ cần «Quét lại»
+          khi có file XML <em>mới xuất ra disk</em> mà app chưa index.
+        </p>
+      </div>
+
+      <h3>Nguồn ngày tạo</h3>
+      <p>
+        Ưu tiên parse từ <strong>tên file KR-800</strong>
+        (<code>YYYYMMDD_HHMMSS</code>), không phải thời điểm file copy vào folder.
+        Ví dụ:
+      </p>
+      <p>
+        <code>HCM2607070269_20260707_145000_TOPCON_KR-800_4780634.xml</code>
+        → <code>created_at = 2026-07-07 14:50:00</code>
+      </p>
+      <p>
+        Khoảng «Ngày xử lý» trên UI (datetime-local) được chuẩn hóa thành
+        <code>YYYY-MM-DD HH:mm:ss</code> (mốc cuối khoảng lấy hết phút, giây <code>:59</code> nếu không nhập giây).
+      </p>
+    </section>
+
+    <!-- 6 -->
+    <section id="xu-ly">
+      <h2><span class="num">6</span> Luồng «Xử lý» gửi HIS</h2>
+
+      <div class="flow">
+        <div class="flow-step">
+          <div class="flow-rail"><div class="flow-dot">1</div></div>
+          <div class="flow-card">
+            <h4>Chọn khoảng thời gian</h4>
+            <p>Cùng khoảng ngày tạo dùng để list file và gọi API danh sách người bệnh HIS.</p>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-rail"><div class="flow-dot">2</div></div>
+          <div class="flow-card">
+            <h4>Lấy file chờ xử lý</h4>
+            <p>
+              SQL: <code>status = 'waiting' AND created_at BETWEEN from AND to</code>
+              — không duyệt 15k file trên UI.
+            </p>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-rail"><div class="flow-dot">3</div></div>
+          <div class="flow-card">
+            <h4>Pipeline từng file (tối đa 5 song song)</h4>
+            <p>
+              Parse XML → hash nội dung (bỏ qua trùng) → tìm BN theo mã hồ sơ →
+              map SPH/CYL/AX → POST HIS → cập nhật status / lỗi.
+            </p>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-rail"><div class="flow-dot">4</div></div>
+          <div class="flow-card">
+            <h4>Cập nhật UI</h4>
+            <p>
+              Event <code>kr800:file-progress</code> cập nhật từng dòng; cuối cùng trả lại
+              list file <em>trong khoảng</em> (không full table).
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section id="truoc-sau">
+      <h2><span class="num">7</span> Trước vs sau tối ưu</h2>
+
+      <table class="compare">
+        <thead>
+          <tr>
+            <th>Hạng mục</th>
+            <th>Trước (gây treo ~17h36)</th>
+            <th>Sau</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Sau scan / rescan</td>
+            <td class="old">Trả về &amp; setState cả ~15k file</td>
+            <td class="new">Chỉ summary; list lại theo khoảng ngày</td>
+          </tr>
+          <tr>
+            <td>Mở màn / list</td>
+            <td class="old"><code>SELECT</code> full device</td>
+            <td class="new"><code>SELECT</code> theo <code>created_at</code> range</td>
+          </tr>
+          <tr>
+            <td>Upsert DB</td>
+            <td class="old">N lần SELECT EXISTS + UPDATE/INSERT</td>
+            <td class="new">1 map + transaction; skip nếu không đổi</td>
+          </tr>
+          <tr>
+            <td>Prune file mất</td>
+            <td class="old">Xóa mọi path không thấy trên disk</td>
+            <td class="new">Bảo vệ khi giảm đột biến / disk rỗng</td>
+          </tr>
+          <tr>
+            <td>Sau process HIS</td>
+            <td class="old">Trả full list device</td>
+            <td class="new">Trả list trong khoảng xử lý</td>
+          </tr>
+          <tr>
+            <td>Spam «Quét lại»</td>
+            <td class="old">Dễ gọi chồng</td>
+            <td class="new">Khóa <code>scanInFlight</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 8 -->
+    <section id="faq">
+      <h2><span class="num">8</span> Câu hỏi thường gặp</h2>
+
+      <div class="qa">
+        <div class="q">Tại sao quét folder vẫn có loading?</div>
+        <p class="a">
+          Vì app đang index XML từ disk vào SQLite. UI hiện “Đang quét thư mục…” và khóa nút quét
+          để tránh chạy chồng. Sau khi xong, bảng chỉ load file theo ngày — nhanh.
+        </p>
+      </div>
+
+      <div class="qa">
+        <div class="q">File hôm qua / tuần trước xem thế nào?</div>
+        <p class="a">
+          Đổi «Ngày xử lý» (Từ – Đến). App query DB ngay, không cần chọn lại folder.
+          Nếu file đó chưa từng được scan vào DB, hãy «Quét lại» một lần.
+        </p>
+      </div>
+
+      <div class="qa">
+        <div class="q">File mới xuất từ máy — có cần bấm Quét lại không?</div>
+        <p class="a">
+          <strong>Không</strong> (luồng thường). App tự index trong vài giây–~20s (poll).
+          Kiểm tra khoảng «Ngày xử lý» có khớp <code>created_at</code> trong tên file.
+          «Quét lại» chỉ khi cần full sync / sửa lệch index thủ công.
+        </p>
+      </div>
+
+      <div class="qa">
+        <div class="q">Tự xử lý HIS có chạy không nếu chưa login?</div>
+        <p class="a">
+          App chỉ auto-process khi đã cấu hình API URL + username. Có thể login tự động
+          bằng mật khẩu đã lưu khi gửi HIS. Nếu thiếu cấu hình, file vẫn được index
+          (<code>waiting</code>) và message báo bỏ qua tự xử lý.
+        </p>
+      </div>
+
+      <div class="qa">
+        <div class="q">Thấy thông báo bỏ qua xóa hàng loạt?</div>
+        <p class="a">
+          App phát hiện disk đang “thiếu” quá nhiều file so với DB (có thể mount lỗi / folder tạm rỗng).
+          Cố ý <strong>không xóa</strong> index để tránh mất dữ liệu tracking như sự cố test trước.
+          Kiểm tra lại path folder rồi quét lại khi disk ổn định.
+        </p>
+      </div>
+
+      <div class="callout info">
+        <div class="title">Thao tác khuyến nghị hàng ngày</div>
+        <ol style="margin:0.4rem 0 0;color:var(--muted);padding-left:1.2rem">
+          <li>Mở app → cấu hình HIS (một lần) → chọn folder tracking (một lần).</li>
+          <li>Giữ khoảng ngày = ca hôm nay (mặc định) để xem bảng.</li>
+          <li>Để app chạy (có thể ẩn tray) — XML mới sẽ tự index + tự gửi HIS.</li>
+          <li>Theo dõi status từng dòng nếu có lỗi (không thấy BN, mapping…).</li>
+          <li>«Quét lại» / «Xử lý» chỉ khi cần can thiệp thủ công.</li>
+        </ol>
+      </div>
+    </section>
+
+    <footer>
+      <p>
+        HIS XML Sync · Tài liệu luồng KR-800 (list theo <code>created_at</code> + auto watch + progress UI).
+        File: <code>docs/luong-hoat-dong-kr800.html</code> — mở bằng trình duyệt.
+      </p>
+      <p style="margin-top:0.35rem">
+        Cập nhật: scan incremental · prune an toàn ·
+        <code>list_xml_files(from, to)</code> ·
+        <code>folder_watch</code> · auto-process · <code>kr800:scan-progress</code> UI mockup.
+      </p>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      var tabs = document.querySelectorAll("[data-ui-tab]");
+      var panels = {
+        idle: document.getElementById("ui-idle"),
+        disk: document.getElementById("ui-disk"),
+        index: document.getElementById("ui-index"),
+        table: document.getElementById("ui-table"),
+      };
+      function show(key) {
+        tabs.forEach(function (btn) {
+          var on = btn.getAttribute("data-ui-tab") === key;
+          btn.classList.toggle("active", on);
+          btn.setAttribute("aria-selected", on ? "true" : "false");
+        });
+        Object.keys(panels).forEach(function (k) {
+          var el = panels[k];
+          if (!el) return;
+          var on = k === key;
+          el.classList.toggle("active", on);
+          if (on) el.removeAttribute("hidden");
+          else el.setAttribute("hidden", "");
+        });
+      }
+      tabs.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          show(btn.getAttribute("data-ui-tab"));
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

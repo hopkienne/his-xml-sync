@@ -1,6 +1,7 @@
 mod app_logger;
 mod commands;
 mod db;
+mod folder_watch;
 mod his_api;
 mod kr800_process;
 mod license;
@@ -12,12 +13,18 @@ mod xml_parser;
 mod xml_track;
 
 use tauri::Manager;
+use tauri_plugin_autostart::MacosLauncher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Đăng ký app vào startup OS (Windows registry / macOS LaunchAgent / Linux).
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             tray::setup(app)?;
 
@@ -37,6 +44,8 @@ pub fn run() {
             );
             app.manage(database);
             app.manage(kr800_process::Kr800ProcessState::default());
+            // Tự quét nền folder tracking + tự xử lý file waiting.
+            folder_watch::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -57,6 +66,7 @@ pub fn run() {
             commands::preview_xml_file,
             commands::run_sync_once,
             commands::get_device_folder,
+            commands::set_auto_process_enabled,
             commands::set_tracking_folder_and_scan,
             commands::rescan_tracking_folder,
             commands::list_xml_files,

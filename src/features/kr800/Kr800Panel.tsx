@@ -7,7 +7,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { TrackedXmlFile, TrackedXmlStatus } from "../../types";
+import type { Kr800ScanProgressEvent, TrackedXmlFile, TrackedXmlStatus } from "../../types";
 
 const FOLDER_COLLAPSE_KEY = "his-xml-sync.kr800-folder-collapsed";
 const PROCESS_RANGE_KEY = "his-xml-sync.kr800-process-range";
@@ -25,8 +25,15 @@ type Kr800PanelProps = {
   files: TrackedXmlFile[];
   isLoading: boolean;
   isScanning: boolean;
+  /** Tiến trình quét thật từ backend (chọn folder / Quét lại). */
+  scanProgress?: Kr800ScanProgressEvent | null;
   error?: string | null;
   statusMessage?: string | null;
+  /** Đang bật quét nền folder (FS watcher / poll). */
+  autoWatchActive?: boolean;
+  autoWatchMessage?: string | null;
+  /** Cờ user (cấu hình ở trang Cấu hình): tự xử lý HIS khi có file waiting. */
+  autoProcessEnabled?: boolean;
   onPickFolder: () => void;
   onRescan: () => void;
   /** Khoảng thời gian xử lý (từ–đến, có giờ). */
@@ -58,8 +65,12 @@ export function Kr800Panel({
   files,
   isLoading,
   isScanning,
+  scanProgress = null,
   error,
   statusMessage,
+  autoWatchActive = false,
+  autoWatchMessage = null,
+  autoProcessEnabled = false,
   onPickFolder,
   onRescan,
   processRange: controlledRange,
@@ -105,7 +116,10 @@ export function Kr800Panel({
     return null;
   }, [processRange.from, processRange.to]);
 
-  /** Chỉ file có created_at nằm trong khoảng chọn mới đưa vào bảng / xử lý. */
+  /**
+   * Backend đã lọc theo `created_at` + khoảng ngày.
+   * Giữ filter client nhẹ như lớp an toàn nếu state còn sót file ngoài range.
+   */
   const filteredFiles = useMemo(() => {
     if (rangeError || !processRange.from || !processRange.to) {
       return [];
@@ -220,12 +234,22 @@ export function Kr800Panel({
               </strong>
             </div>
 
+            {trackingFolder ? (
+              <p
+                className={`kr800-message${autoWatchActive ? " kr800-message--watch-on" : ""}`}
+                title={autoWatchMessage || undefined}
+              >
+                {autoWatchActive
+                  ? autoProcessEnabled
+                    ? "● Theo dõi folder: BẬT — quét nền + tự xử lý HIS"
+                    : "● Theo dõi folder: BẬT — chỉ quét nền (tự xử lý đang TẮT)"
+                  : "○ Theo dõi folder: đang kết nối… (sẽ bật sau khi app nhận folder)"}
+              </p>
+            ) : null}
+
             <div className="kr800-status-row" aria-live="polite">
-              <span className="sync-summary-chip">
+              <span className="sync-summary-chip" title="Số file theo ngày tạo (created_at) trong khoảng đã chọn">
                 Trong khoảng <strong>{filteredFiles.length}</strong>
-                {files.length !== filteredFiles.length ? (
-                  <span className="kr800-chip-muted"> / {files.length}</span>
-                ) : null}
               </span>
               <span className="sync-summary-chip">
                 Chờ <strong>{counts.waiting}</strong>
@@ -241,6 +265,7 @@ export function Kr800Panel({
               </span>
             </div>
 
+            {isScanning ? <ScanProgressBar progress={scanProgress} /> : null}
             {statusMessage ? <p className="kr800-message">{statusMessage}</p> : null}
             {error ? (
               <p className="settings-error" role="alert">
@@ -250,12 +275,10 @@ export function Kr800Panel({
           </div>
         ) : (
           <div className="kr800-folder__collapsed-meta">
+            {isScanning ? <ScanProgressBar progress={scanProgress} compact /> : null}
             <div className="kr800-status-row" aria-live="polite">
-              <span className="sync-summary-chip">
+              <span className="sync-summary-chip" title="Số file theo ngày tạo trong khoảng đã chọn">
                 Trong khoảng <strong>{filteredFiles.length}</strong>
-                {files.length !== filteredFiles.length ? (
-                  <span className="kr800-chip-muted"> / {files.length}</span>
-                ) : null}
               </span>
               <span className="sync-summary-chip">
                 Chờ <strong>{counts.waiting}</strong>
@@ -264,6 +287,7 @@ export function Kr800Panel({
                 Lỗi <strong>{counts.failed}</strong>
               </span>
             </div>
+            {statusMessage ? <p className="kr800-message">{statusMessage}</p> : null}
             {error ? (
               <p className="settings-error" role="alert">
                 {error}
@@ -350,18 +374,28 @@ export function Kr800Panel({
               </tr>
             </thead>
             <tbody>
-              {isLoading ? (
+              {isLoading || isScanning ? (
                 <tr>
                   <td colSpan={6} className="table-empty">
-                    Đang tải…
-                  </td>
-                </tr>
-              ) : files.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="table-empty">
-                    {trackingFolder
-                      ? "Không có file XML trong thư mục (hoặc chưa quét)."
-                      : "Chọn thư mục tracking để tải danh sách file XML."}
+                    {isScanning ? (
+                      <div className="kr800-scan-table-status">
+                        <span>
+                          {scanProgress?.message || "Đang quét thư mục tracking…"}
+                        </span>
+                        {scanProgress && scanProgress.total > 0 ? (
+                          <span className="kr800-chip-muted">
+                            {scanProgress.current.toLocaleString("vi-VN")}/
+                            {scanProgress.total.toLocaleString("vi-VN")} ({scanProgress.percent}%)
+                          </span>
+                        ) : scanProgress && scanProgress.current > 0 ? (
+                          <span className="kr800-chip-muted">
+                            {scanProgress.current.toLocaleString("vi-VN")} file XML
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : (
+                      "Đang tải theo khoảng ngày tạo…"
+                    )}
                   </td>
                 </tr>
               ) : rangeError ? (
@@ -370,11 +404,17 @@ export function Kr800Panel({
                     Khoảng thời gian không hợp lệ — chỉnh lại bộ lọc phía trên.
                   </td>
                 </tr>
+              ) : !trackingFolder ? (
+                <tr>
+                  <td colSpan={6} className="table-empty">
+                    Chọn thư mục tracking để tải danh sách file XML.
+                  </td>
+                </tr>
               ) : filteredFiles.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="table-empty">
-                    Không có file nào trong khoảng thời gian đã chọn ({files.length} file ngoài
-                    khoảng).
+                    Không có file XML có ngày tạo trong khoảng đã chọn. Đổi khoảng thời gian
+                    hoặc bấm «Quét lại» nếu vừa xuất file mới.
                   </td>
                 </tr>
               ) : (
@@ -420,6 +460,57 @@ export function Kr800Panel({
         </div>
       </div>
     </section>
+  );
+}
+
+function ScanProgressBar({
+  progress,
+  compact = false,
+}: {
+  progress: Kr800ScanProgressEvent | null;
+  compact?: boolean;
+}) {
+  const phaseLabel =
+    progress?.phase === "disk"
+      ? "Đọc disk"
+      : progress?.phase === "index"
+        ? "Ghi SQLite"
+        : progress?.phase === "prune"
+          ? "Dọn index"
+          : progress?.phase === "done"
+            ? "Hoàn tất"
+            : "Đang quét";
+
+  const hasTotal = Boolean(progress && progress.total > 0);
+  const percent = hasTotal ? progress!.percent : undefined;
+  const barStyle = hasTotal
+    ? { width: `${Math.min(100, Math.max(0, percent ?? 0))}%` }
+    : undefined;
+
+  return (
+    <div
+      className={`kr800-scan-progress${compact ? " is-compact" : ""}`}
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={hasTotal ? 100 : undefined}
+      aria-valuenow={hasTotal ? percent : undefined}
+      aria-label={progress?.message || "Đang quét thư mục"}
+    >
+      <div className="kr800-scan-progress__meta">
+        <strong>{phaseLabel}</strong>
+        <span>
+          {progress?.message || "Đang quét thư mục tracking…"}
+          {hasTotal
+            ? ` — ${progress!.current.toLocaleString("vi-VN")}/${progress!.total.toLocaleString("vi-VN")} (${percent}%)`
+            : progress && progress.current > 0
+              ? ` — ${progress.current.toLocaleString("vi-VN")} file XML`
+              : ""}
+        </span>
+      </div>
+      <div className={`kr800-scan-progress__track${hasTotal ? "" : " is-indeterminate"}`}>
+        <div className="kr800-scan-progress__fill" style={barStyle} />
+      </div>
+    </div>
   );
 }
 
