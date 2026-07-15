@@ -238,6 +238,159 @@ pub fn set_auto_process_enabled(
     get_device_folder(db, device_key)
 }
 
+/// Một tham số query của API danh sách người bệnh (key–value + cờ gửi).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PatientQueryParam {
+    pub key: String,
+    pub value: String,
+    /// `false` → không đưa vào query khi gọi API. JSON cũ thiếu field → true.
+    #[serde(default = "default_param_enabled")]
+    pub enabled: bool,
+}
+
+fn default_param_enabled() -> bool {
+    true
+}
+
+/// Mặc định khớp hành vi hiện tại của pipeline KR-800.
+pub fn default_patient_query_params() -> Vec<PatientQueryParam> {
+    vec![
+        PatientQueryParam {
+            key: "page".into(),
+            value: "0".into(),
+            enabled: true,
+        },
+        PatientQueryParam {
+            key: "sort".into(),
+            value: "thoiGianVaoVien,asc".into(),
+            enabled: true,
+        },
+        PatientQueryParam {
+            key: "size".into(),
+            value: "9999".into(),
+            enabled: true,
+        },
+        PatientQueryParam {
+            key: "tuThoiGianVaoVien".into(),
+            value: "".into(),
+            enabled: true,
+        },
+        PatientQueryParam {
+            key: "denThoiGianVaoVien".into(),
+            value: "".into(),
+            enabled: true,
+        },
+        PatientQueryParam {
+            key: "theoPhongKham".into(),
+            value: "false".into(),
+            enabled: true,
+        },
+        PatientQueryParam {
+            key: "dsCoSoKcbId".into(),
+            value: "4".into(),
+            enabled: true,
+        },
+    ]
+}
+
+/// Đọc query params API người bệnh. NULL / rỗng / JSON lỗi → mặc định.
+pub fn get_patient_query_params(
+    db: &AppDb,
+    device_key: &str,
+) -> Result<Vec<PatientQueryParam>, String> {
+    let conn = lock_conn(db)?;
+    let raw: Option<Option<String>> = conn
+        .query_row(
+            r#"
+            SELECT patient_query_params
+            FROM device_config
+            WHERE device_key = ?1
+            "#,
+            params![device_key],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|e| format!("Đọc patient_query_params thất bại: {e}"))?;
+
+    match raw {
+        Some(Some(json)) if !json.trim().is_empty() => {
+            // Bỏ tham số đã ngừng dùng (cấu hình cũ còn lưu trong SQLite).
+            Ok(strip_retired_patient_query_params(parse_patient_query_params(
+                &json,
+            )?))
+        }
+        _ => Ok(default_patient_query_params()),
+    }
+}
+
+/// Các key không còn gửi lên API người bệnh.
+fn strip_retired_patient_query_params(
+    params: Vec<PatientQueryParam>,
+) -> Vec<PatientQueryParam> {
+    params
+        .into_iter()
+        .filter(|item| item.key.trim() != "dsTrangThai")
+        .collect()
+}
+
+/// Lưu query params API người bệnh (JSON array).
+pub fn save_patient_query_params(
+    db: &AppDb,
+    device_key: &str,
+    params: Vec<PatientQueryParam>,
+) -> Result<Vec<PatientQueryParam>, String> {
+    let cleaned =
+        sanitize_patient_query_params(strip_retired_patient_query_params(params))?;
+    let json = serde_json::to_string(&cleaned)
+        .map_err(|e| format!("Serialize patient_query_params thất bại: {e}"))?;
+    let conn = lock_conn(db)?;
+    conn.execute(
+        r#"
+        INSERT INTO device_config (
+          device_key, tracking_folder, auto_process_enabled, patient_query_params, updated_at
+        )
+        VALUES (?1, '', 0, ?2, datetime('now'))
+        ON CONFLICT(device_key) DO UPDATE SET
+          patient_query_params = excluded.patient_query_params,
+          updated_at = datetime('now')
+        "#,
+        params![device_key, json],
+    )
+    .map_err(|e| format!("Lưu patient_query_params thất bại: {e}"))?;
+    Ok(cleaned)
+}
+
+fn parse_patient_query_params(json: &str) -> Result<Vec<PatientQueryParam>, String> {
+    match serde_json::from_str::<Vec<PatientQueryParam>>(json) {
+        Ok(parsed) => Ok(parsed),
+        // JSON hỏng schema không nên phá runtime — fallback default.
+        Err(_) => Ok(default_patient_query_params()),
+    }
+}
+
+fn sanitize_patient_query_params(
+    params: Vec<PatientQueryParam>,
+) -> Result<Vec<PatientQueryParam>, String> {
+    let mut cleaned = Vec::with_capacity(params.len());
+    let mut seen = std::collections::HashSet::new();
+    for item in params {
+        let key = item.key.trim().to_string();
+        if key.is_empty() {
+            return Err("Tên tham số (key) không được để trống.".into());
+        }
+        if !seen.insert(key.clone()) {
+            return Err(format!("Tham số «{key}» bị trùng."));
+        }
+        cleaned.push(PatientQueryParam {
+            key,
+            value: item.value,
+            enabled: item.enabled,
+        });
+    }
+    Ok(cleaned)
+}
+
 /// Đọc cờ auto-process (mặc định false nếu chưa có cấu hình device).
 pub fn is_auto_process_enabled(db: &AppDb, device_key: &str) -> bool {
     get_device_folder(db, device_key)

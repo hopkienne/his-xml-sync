@@ -3,12 +3,12 @@ use crate::{
     db::AppDb,
     folder_watch,
     his_api::{self, HisAuthStatus},
-    kr800_process::{self, Kr800ProcessState, ProcessResult},
+    kr800_process::{self, Kr800ProcessState, PatientListSnapshot, ProcessResult},
     license::{self, LicenseInfo, LicenseStatus},
     settings::{self, AppSettings},
     sync::{self, SyncSummary},
     xml_parser::{self, XmlPreview},
-    xml_track::{self, DeviceFolderState, ScanResult, TrackedXmlFile},
+    xml_track::{self, DeviceFolderState, PatientQueryParam, ScanResult, TrackedXmlFile},
 };
 use tauri::{AppHandle, State};
 
@@ -154,6 +154,75 @@ pub fn get_device_folder(
         }
         Err(err) => {
             app_logger::error("xml_track", &format!("get_device_folder failed: {err}"));
+            Err(err)
+        }
+    }
+}
+
+/// Query params API danh sách người bệnh (KR-800).
+#[tauri::command]
+pub fn get_patient_query_params(
+    db: State<'_, AppDb>,
+    device_key: String,
+) -> Result<Vec<PatientQueryParam>, String> {
+    app_logger::debug(
+        "xml_track",
+        &format!("get_patient_query_params device={device_key}"),
+    );
+    match xml_track::get_patient_query_params(&db, &device_key) {
+        Ok(params) => {
+            app_logger::info(
+                "xml_track",
+                &format!(
+                    "get_patient_query_params ok device={} count={}",
+                    device_key,
+                    params.len()
+                ),
+            );
+            Ok(params)
+        }
+        Err(err) => {
+            app_logger::error(
+                "xml_track",
+                &format!("get_patient_query_params failed: {err}"),
+            );
+            Err(err)
+        }
+    }
+}
+
+/// Lưu query params API danh sách người bệnh (KR-800).
+#[tauri::command]
+pub fn save_patient_query_params(
+    db: State<'_, AppDb>,
+    device_key: String,
+    params: Vec<PatientQueryParam>,
+) -> Result<Vec<PatientQueryParam>, String> {
+    app_logger::info(
+        "xml_track",
+        &format!(
+            "save_patient_query_params device={} count={}",
+            device_key,
+            params.len()
+        ),
+    );
+    match xml_track::save_patient_query_params(&db, &device_key, params) {
+        Ok(saved) => {
+            app_logger::info(
+                "xml_track",
+                &format!(
+                    "save_patient_query_params ok device={} count={}",
+                    device_key,
+                    saved.len()
+                ),
+            );
+            Ok(saved)
+        }
+        Err(err) => {
+            app_logger::error(
+                "xml_track",
+                &format!("save_patient_query_params failed: {err}"),
+            );
             Err(err)
         }
     }
@@ -318,6 +387,14 @@ pub fn list_xml_files(
             Err(err)
         }
     }
+}
+
+/// JSON danh sách người bệnh từ lần gọi API thành công gần nhất (phiên app).
+#[tauri::command]
+pub async fn get_last_patient_list(
+    process_state: State<'_, Kr800ProcessState>,
+) -> Result<Option<PatientListSnapshot>, String> {
+    Ok(kr800_process::get_last_patient_list(&process_state).await)
 }
 
 #[tauri::command]

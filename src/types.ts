@@ -109,6 +109,31 @@ export type DeviceFolderState = {
   updatedAt?: string | null;
 };
 
+/** Tham số query API danh sách người bệnh (KR-800). */
+export type PatientQueryParam = {
+  key: string;
+  value: string;
+  /** false → không gửi trong query API. Mặc định true. */
+  enabled?: boolean;
+};
+
+/** Snapshot JSON API người bệnh (lưu trong phiên app, không persist). */
+export type PatientListSnapshot = {
+  body: string;
+  fromTime: string;
+  toTime: string;
+  patientCount: number;
+  fetchedAt: string;
+};
+
+/** Event khi API người bệnh gọi thành công. */
+export type PatientListReadyEvent = {
+  patientCount: number;
+  fromTime: string;
+  toTime: string;
+  fetchedAt: string;
+};
+
 /** Kết quả quét folder — không kèm full danh sách file (tránh treo UI với 15k+ bản ghi). */
 export type FolderScanResult = {
   trackingFolder: string;

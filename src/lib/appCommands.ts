@@ -12,6 +12,8 @@ import type {
   ExportLogsResult,
   FolderScanResult,
   HisAuthStatus,
+  PatientListSnapshot,
+  PatientQueryParam,
   SyncSummary,
   TrackedXmlFile,
   XmlPreview,
@@ -111,6 +113,58 @@ export async function setAutoProcessEnabled(
   });
 }
 
+/** Query params API danh sách người bệnh (mặc định nếu chưa lưu). */
+export async function getPatientQueryParams(
+  deviceKey: string = KR800_DEVICE_KEY,
+): Promise<PatientQueryParam[]> {
+  try {
+    return await invoke<PatientQueryParam[]>("get_patient_query_params", {
+      deviceKey,
+    });
+  } catch {
+    return defaultPatientQueryParams();
+  }
+}
+
+/** Lưu query params API danh sách người bệnh. */
+export async function savePatientQueryParams(
+  params: PatientQueryParam[],
+  deviceKey: string = KR800_DEVICE_KEY,
+): Promise<PatientQueryParam[]> {
+  return await invoke<PatientQueryParam[]>("save_patient_query_params", {
+    deviceKey,
+    params,
+  });
+}
+
+/** Mặc định khớp backend `default_patient_query_params`. */
+export function defaultPatientQueryParams(): PatientQueryParam[] {
+  return [
+    { key: "page", value: "0", enabled: true },
+    { key: "sort", value: "thoiGianVaoVien,asc", enabled: true },
+    { key: "size", value: "9999", enabled: true },
+    { key: "tuThoiGianVaoVien", value: "", enabled: true },
+    { key: "denThoiGianVaoVien", value: "", enabled: true },
+    { key: "theoPhongKham", value: "false", enabled: true },
+    { key: "dsCoSoKcbId", value: "4", enabled: true },
+  ];
+}
+
+/** Key thuộc bộ mặc định — không cho xoá khỏi popup. */
+export function isDefaultPatientParamKey(key: string): boolean {
+  return DEFAULT_PATIENT_PARAM_KEYS.has(key.trim());
+}
+
+const DEFAULT_PATIENT_PARAM_KEYS = new Set(
+  defaultPatientQueryParams().map((item) => item.key),
+);
+
+/** Hai key thời gian lấy theo datetime picker «Ngày xử lý». */
+export function isProcessRangeBoundParam(key: string): boolean {
+  const k = key.trim();
+  return k === "tuThoiGianVaoVien" || k === "denThoiGianVaoVien";
+}
+
 export async function setTrackingFolderAndScan(
   folder: string,
   deviceKey: string = KR800_DEVICE_KEY,
@@ -165,6 +219,18 @@ export async function processKr800(
     fromTime,
     toTime,
   });
+}
+
+/**
+ * JSON danh sách người bệnh lần gọi API thành công gần nhất trong phiên app.
+ * `null` nếu chưa gọi thành công kể từ khi mở app.
+ */
+export async function getLastPatientList(): Promise<PatientListSnapshot | null> {
+  try {
+    return await invoke<PatientListSnapshot | null>("get_last_patient_list");
+  } catch {
+    return null;
+  }
 }
 
 /** Mở native folder picker; trả về path hoặc null nếu hủy. */

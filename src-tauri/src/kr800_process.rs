@@ -22,28 +22,55 @@ const UPDATE_PATH: &str = "/api/his/v1/nb-kham-ck-mat";
 const MAX_CONCURRENT_FILES: usize = 5;
 const MAX_TRANSIENT_RETRIES: u32 = 3;
 const FILE_PROGRESS_EVENT: &str = "kr800:file-progress";
+const PATIENT_LIST_EVENT: &str = "kr800:patient-list-ready";
 
 #[derive(Default)]
 pub struct Kr800ProcessState {
     run_lock: Mutex<()>,
     token_lock: Mutex<()>,
     patient_cache: Mutex<Option<PatientCache>>,
+    /// JSON response API danh sách người bệnh (trong phiên app; không persist DB).
+    last_patient_list: Mutex<Option<PatientListSnapshot>>,
     hash_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+/// Snapshot response API người bệnh để UI xem JSON.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatientListSnapshot {
+    /// Raw body JSON từ HIS.
+    pub body: String,
+    pub from_time: String,
+    pub to_time: String,
+    pub patient_count: usize,
+    pub fetched_at: String,
+}
+
+/// Event nhẹ khi API người bệnh gọi thành công (không kèm body lớn).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatientListReadyEvent {
+    pub patient_count: usize,
+    pub from_time: String,
+    pub to_time: String,
+    pub fetched_at: String,
 }
 
 #[derive(Clone)]
 struct PatientCache {
     key: PatientCacheKey,
     index: Arc<PatientIndex>,
+    raw_body: Arc<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PatientCacheKey {
     from_time: String,
     to_time: String,
-    facility_id: i64,
     api_url: String,
     username: String,
+    /// Query string fingerprint (key=value&…) sau khi resolve time range.
+    query_fingerprint: String,
 }
 
 type PatientIndex = HashMap<String, Vec<Option<i64>>>;
@@ -176,7 +203,8 @@ async fn process_inner(
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|error| format!("Không tạo được HTTP client: {error}"))?;
-    let patients = patient_index(db, state, &client, &settings, from_time, to_time).await?;
+    let patients =
+        patient_index(app, db, state, &client, &settings, from_time, to_time).await?;
     let work = waiting_files(db, from_time, to_time)?;
     let total = work.len();
 
@@ -360,7 +388,15 @@ fn normalize_patient_code(value: &str) -> String {
     value.trim().to_lowercase()
 }
 
+/// Trả snapshot JSON danh sách người bệnh lần gọi API thành công gần nhất (phiên hiện tại).
+pub async fn get_last_patient_list(
+    state: &Kr800ProcessState,
+) -> Option<PatientListSnapshot> {
+    state.last_patient_list.lock().await.clone()
+}
+
 async fn patient_index(
+    app: &AppHandle,
     db: &AppDb,
     state: &Kr800ProcessState,
     client: &Client,
@@ -368,24 +404,35 @@ async fn patient_index(
     from_time: &str,
     to_time: &str,
 ) -> Result<Arc<PatientIndex>, String> {
+    let stored_params = xml_track::get_patient_query_params(db, DEVICE_KEY)?;
+    let query = build_patient_query(&stored_params, from_time, to_time);
     let key = PatientCacheKey {
         from_time: from_time.to_string(),
         to_time: to_time.to_string(),
-        facility_id: settings.ds_co_so_kcb_id,
         api_url: settings.his_api_url.trim().to_string(),
         username: settings.username.trim().to_string(),
+        query_fingerprint: patient_query_fingerprint(&query),
     };
     if let Some(cache) = state.patient_cache.lock().await.as_ref() {
         if cache.key == key {
+            // Cache hit: vẫn publish snapshot để UI bật nút «Danh sách bệnh nhân».
+            let snapshot = PatientListSnapshot {
+                body: (*cache.raw_body).clone(),
+                from_time: from_time.to_string(),
+                to_time: to_time.to_string(),
+                patient_count: count_patients_in_index(&cache.index),
+                fetched_at: chrono_now_local(),
+            };
+            store_and_emit_patient_list(app, state, snapshot).await;
             return Ok(Arc::clone(&cache.index));
         }
     }
     let url = his_api::join_url(&settings.his_api_url, PATIENT_PATH);
     let mut token = ensure_token(db, state).await?;
-    let mut response = fetch_patients(client, &url, &token, &key).await?;
+    let mut response = fetch_patients(client, &url, &token, &query).await?;
     if response.status() == StatusCode::UNAUTHORIZED {
         token = refresh_token(db, state, &token).await?;
-        response = fetch_patients(client, &url, &token, &key).await?;
+        response = fetch_patients(client, &url, &token, &query).await?;
     }
     let status = response.status();
     let body = response
@@ -401,6 +448,7 @@ async fn patient_index(
     }
     let envelope: PatientEnvelope = serde_json::from_str(&body)
         .map_err(|error| format!("Response người bệnh không hợp lệ: {error}"))?;
+    let patient_count = envelope.data.len();
     let mut index: PatientIndex = HashMap::new();
     for patient in envelope.data {
         // Key lowercase để khớp nsCommon:ID / maHoSo không phân biệt hoa-thường.
@@ -409,33 +457,94 @@ async fn patient_index(
             .or_default()
             .push(patient.nb_dot_dieu_tri_id);
     }
+    let raw_body = Arc::new(body);
     let index = Arc::new(index);
     *state.patient_cache.lock().await = Some(PatientCache {
         key,
         index: Arc::clone(&index),
+        raw_body: Arc::clone(&raw_body),
     });
+    let snapshot = PatientListSnapshot {
+        body: (*raw_body).clone(),
+        from_time: from_time.to_string(),
+        to_time: to_time.to_string(),
+        patient_count,
+        fetched_at: chrono_now_local(),
+    };
+    store_and_emit_patient_list(app, state, snapshot).await;
     Ok(index)
+}
+
+async fn store_and_emit_patient_list(
+    app: &AppHandle,
+    state: &Kr800ProcessState,
+    snapshot: PatientListSnapshot,
+) {
+    let event = PatientListReadyEvent {
+        patient_count: snapshot.patient_count,
+        from_time: snapshot.from_time.clone(),
+        to_time: snapshot.to_time.clone(),
+        fetched_at: snapshot.fetched_at.clone(),
+    };
+    *state.last_patient_list.lock().await = Some(snapshot);
+    if let Err(error) = app.emit(PATIENT_LIST_EVENT, event) {
+        app_logger::warn(
+            "kr800",
+            &format!("emit {PATIENT_LIST_EVENT} failed: {error}"),
+        );
+    }
+}
+
+fn count_patients_in_index(index: &PatientIndex) -> usize {
+    index.values().map(|rows| rows.len()).sum()
+}
+
+fn chrono_now_local() -> String {
+    chrono::Local::now()
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
+/// Build query từ tham số đã cấu hình (chỉ `enabled = true`).
+/// `tuThoiGianVaoVien` / `denThoiGianVaoVien` luôn lấy theo khoảng «Ngày xử lý».
+fn build_patient_query(
+    params: &[xml_track::PatientQueryParam],
+    from_time: &str,
+    to_time: &str,
+) -> Vec<(String, String)> {
+    params
+        .iter()
+        .filter(|item| item.enabled && !item.key.trim().is_empty())
+        .map(|item| {
+            let key = item.key.trim().to_string();
+            let value = match key.as_str() {
+                "tuThoiGianVaoVien" => from_time.to_string(),
+                "denThoiGianVaoVien" => to_time.to_string(),
+                _ => item.value.clone(),
+            };
+            (key, value)
+        })
+        .collect()
+}
+
+fn patient_query_fingerprint(query: &[(String, String)]) -> String {
+    query
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 async fn fetch_patients(
     client: &Client,
     url: &str,
     token: &str,
-    key: &PatientCacheKey,
+    query: &[(String, String)],
 ) -> Result<reqwest::Response, String> {
     client
         .get(url)
         .bearer_auth(token)
-        .query(&[
-            ("page", "0".to_string()),
-            ("sort", "thoiGianVaoVien,asc".to_string()),
-            ("size", "9999".to_string()),
-            ("tuThoiGianVaoVien", key.from_time.clone()),
-            ("denThoiGianVaoVien", key.to_time.clone()),
-            ("dsTrangThai", "10".to_string()),
-            ("theoPhongKham", "false".to_string()),
-            ("dsCoSoKcbId", key.facility_id.to_string()),
-        ])
+        .query(query)
         .send()
         .await
         .map_err(|error| format!("Gọi API danh sách người bệnh thất bại: {error}"))

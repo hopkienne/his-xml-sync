@@ -66,6 +66,8 @@ pub fn run() {
             commands::preview_xml_file,
             commands::run_sync_once,
             commands::get_device_folder,
+            commands::get_patient_query_params,
+            commands::save_patient_query_params,
             commands::set_auto_process_enabled,
             commands::set_tracking_folder_and_scan,
             commands::rescan_tracking_folder,
@@ -75,6 +77,7 @@ pub fn run() {
             commands::log_client_event,
             commands::login_his,
             commands::get_auth_status,
+            commands::get_last_patient_list,
             commands::process_kr800
         ])
         .run(tauri::generate_context!())

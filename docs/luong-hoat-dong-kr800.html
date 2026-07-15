@@ -821,6 +821,173 @@
       color: var(--muted);
     }
     .mock-callout-note code { font-size: 0.85em; }
+
+    /* —— Popup «Danh sách bệnh nhân» (JSON view) —— */
+    .mock-stage {
+      position: relative;
+    }
+    .mock-stage > .mock-frame {
+      /* Nền app phía sau popup */
+      pointer-events: none;
+    }
+    .mock-modal-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.25rem 1rem;
+      background: rgba(15, 42, 46, 0.42);
+      backdrop-filter: blur(2px);
+      border-radius: 14px;
+    }
+    .mock-modal {
+      width: min(720px, 100%);
+      max-height: min(92%, 640px);
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      padding: 0.95rem 1.05rem 0.85rem;
+      border-radius: 8px;
+      background: #fff;
+      border: 1px solid #dde4e8;
+      box-shadow: 0 16px 40px rgba(15, 42, 46, 0.18);
+      color: #15262b;
+    }
+    .mock-modal__header {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+    .mock-modal__header h4 {
+      margin: 0 0 0.2rem;
+      font-size: 1.02rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: #15262b;
+    }
+    .mock-modal__header h4 .icon {
+      color: #0d8a7f;
+      font-size: 1rem;
+    }
+    .mock-modal__lead {
+      margin: 0;
+      color: #5a6b72;
+      font-size: 0.78rem;
+      line-height: 1.45;
+    }
+    .mock-modal__lead code {
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 0.9em;
+      color: #0a5f56;
+    }
+    .mock-modal__close {
+      flex-shrink: 0;
+      margin-left: auto;
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #c2ced4;
+      border-radius: 6px;
+      background: #fff;
+      color: #5a6b72;
+      font-size: 1rem;
+      line-height: 1;
+      cursor: default;
+    }
+    .mock-modal__hint {
+      margin: 0;
+      padding: 0.45rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid #b7e2dc;
+      background: #e6f6f4;
+      color: #5a6b72;
+      font-size: 0.74rem;
+      line-height: 1.4;
+    }
+    .mock-modal__hint strong { color: #15262b; }
+    .mock-modal__body {
+      min-height: 0;
+      flex: 1 1 auto;
+      overflow: hidden;
+    }
+    .mock-json-view {
+      margin: 0;
+      max-height: 340px;
+      overflow: auto;
+      padding: 0.75rem 0.9rem;
+      border: 1px solid #dde4e8;
+      border-radius: 6px;
+      background: #0f1b1e;
+      color: #d7ece8;
+      font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      line-height: 1.45;
+      white-space: pre;
+      tab-size: 2;
+    }
+    .mock-json-view .jk { color: #7dd3c0; }
+    .mock-json-view .js { color: #f0c674; }
+    .mock-json-view .jn { color: #8ab4f8; }
+    .mock-json-view .jb { color: #c792ea; }
+    .mock-json-view .jp { color: #93a4bc; }
+    .mock-modal__footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding-top: 0.15rem;
+    }
+    .mock-json-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.4rem;
+    }
+    .mock-json-toolbar span {
+      color: #5a6b72;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .mock-json-toolbar .mock-btn {
+      font-size: 0.75rem;
+      padding: 0.28rem 0.55rem;
+    }
+    .mock-btn.copy-ok {
+      color: #1a7f4b;
+      background: #e9f7ef;
+      border: 1px solid #b9e4cb;
+    }
+    .mock-btn.ghost {
+      background: #fff;
+      color: #5a6b72;
+      border: 1px solid #c2ced4;
+    }
+    .mock-btn.enabled-teal {
+      background: #e6f6f4;
+      color: #0a5f56;
+      border: 1px solid #b7e2dc;
+    }
+    .mock-range {
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      align-items: center;
+    }
+    .mock-heading-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -846,6 +1013,7 @@
       <h2>Mục lục</h2>
       <ol>
         <li><a href="#ui-mockup">Giao diện UI (mockup)</a></li>
+        <li><a href="#ui-patients-json">Popup DS bệnh nhân (JSON)</a></li>
         <li><a href="#tl-dr">Tóm tắt nhanh (TL;DR)</a></li>
         <li><a href="#kien-truc">Hai tầng: Disk index vs UI list</a></li>
         <li><a href="#luong-chinh">Luồng chính end-to-end</a></li>
@@ -863,7 +1031,7 @@
       <p>
         Phác thảo theo design system app (nền xám nhạt, sidebar teal, card trắng).
         Bấm tab để xem các trạng thái đã triển khai: idle + auto-watch, đang quét (progress),
-        và bảng file theo ngày tạo.
+        bảng file theo ngày tạo, và popup <strong>Danh sách bệnh nhân</strong> (view JSON).
       </p>
 
       <div class="ui-tabs" role="tablist" aria-label="Trạng thái UI">
@@ -871,6 +1039,7 @@
         <button type="button" data-ui-tab="disk" role="tab" aria-selected="false">2. Đang quét — đọc disk</button>
         <button type="button" data-ui-tab="index" role="tab" aria-selected="false">3. Đang quét — index SQLite</button>
         <button type="button" data-ui-tab="table" role="tab" aria-selected="false">4. Danh sách theo ngày tạo</button>
+        <button type="button" data-ui-tab="patients" role="tab" aria-selected="false">5. Popup DS bệnh nhân (JSON)</button>
       </div>
 
       <!-- STATE: idle -->
@@ -936,7 +1105,11 @@
                       <input type="text" value="2026-07-14 00:00" readonly />
                       <span>→</span>
                       <input type="text" value="2026-07-14 23:59" readonly />
-                      <span class="mock-btn primary">▶ Xử lý</span>
+                      <div class="mock-heading-actions">
+                        <span class="mock-btn ghost">⚙ Tham số</span>
+                        <span class="mock-btn disabled" title="Chỉ bật sau khi gọi API người bệnh thành công">👥 DS bệnh nhân</span>
+                        <span class="mock-btn primary">▶ Xử lý</span>
+                      </div>
                     </div>
                   </div>
                   <div class="mock-table-wrap">
@@ -976,6 +1149,7 @@
         <p class="mock-callout-note">
           <strong>Idle:</strong> folder đã chọn, auto-watch bật (xanh), chips đếm theo khoảng ngày,
           bảng chỉ ~file trong ngày — không load 15k.
+          Nút <strong>DS bệnh nhân</strong> đang <em>disable</em> (chưa gọi API người bệnh trong phiên).
         </p>
       </div>
 
@@ -1191,7 +1365,11 @@
                       <input type="text" value="2026-07-14T00:00" readonly title="datetime-local" />
                       <span>→</span>
                       <input type="text" value="2026-07-14T23:59" readonly />
-                      <span class="mock-btn primary">▶ Xử lý</span>
+                      <div class="mock-heading-actions">
+                        <span class="mock-btn ghost">⚙ Tham số</span>
+                        <span class="mock-btn enabled-teal" title="Đã có JSON API người bệnh trong phiên">👥 DS bệnh nhân</span>
+                        <span class="mock-btn primary">▶ Xử lý</span>
+                      </div>
                     </div>
                   </div>
                   <div class="mock-table-wrap">
@@ -1251,7 +1429,194 @@
           Sau scan: summary status (15 455 index trong DB) nhưng bảng chỉ
           <code>list_xml_files(from, to)</code> theo «Ngày xử lý» — ví dụ 4 dòng hôm nay.
           Auto-process có thể đổi status waiting → đang xử lý / đã xử lý / lỗi.
+          Nút <strong>DS bệnh nhân</strong> <em>enable</em> sau khi API người bệnh gọi thành công (xem tab 5).
         </p>
+      </div>
+
+      <!-- STATE: patient list JSON popup -->
+      <div class="ui-panel" id="ui-patients" role="tabpanel" hidden>
+        <div class="mock-stage" id="ui-patients-json">
+          <div class="mock-frame" aria-label="Mockup — popup Danh sách bệnh nhân JSON">
+            <div class="mock-chrome">
+              <span class="mock-dot r"></span><span class="mock-dot y"></span><span class="mock-dot g"></span>
+              <span>HIS XML Sync — xem JSON danh sách bệnh nhân</span>
+            </div>
+            <div class="mock-app">
+              <aside class="mock-sidebar">
+                <div class="mock-brand">HIS XML Sync</div>
+                <div class="mock-nav-label">Thiết bị</div>
+                <div class="mock-nav-item active">KR-800</div>
+                <div class="mock-nav-label">Hệ thống</div>
+                <div class="mock-nav-item">Cấu hình</div>
+              </aside>
+              <div class="mock-main">
+                <header class="mock-topbar">
+                  <div>
+                    <h3>KR-800</h3>
+                    <p>Máy đo khúc xạ TOPCON KR-800 — theo dõi folder XML và trạng thái file</p>
+                  </div>
+                  <div class="mock-pill"><span class="dot"></span> HIS: Đỗ Thị Huyền</div>
+                </header>
+                <div class="mock-work">
+                  <div class="mock-card">
+                    <div class="mock-card-head">
+                      <div class="title">▾ Thư mục tracking</div>
+                      <div class="mock-actions">
+                        <span class="mock-btn">↻ Quét lại</span>
+                        <span class="mock-btn primary">📁 Chọn thư mục</span>
+                      </div>
+                    </div>
+                    <div class="mock-card-body">
+                      <div class="mock-path-box">
+                        <span>Đường dẫn đang theo dõi</span>
+                        <strong>D:\DATA_PACS\KR800</strong>
+                      </div>
+                      <p class="mock-watch-on">● Theo dõi folder: BẬT — quét nền + tự xử lý HIS</p>
+                      <div class="mock-chips">
+                        <span class="mock-chip">Trong khoảng <strong>4</strong></span>
+                        <span class="mock-chip">Chờ <strong>1</strong></span>
+                        <span class="mock-chip">Đã xử lý <strong>2</strong></span>
+                      </div>
+                      <p class="mock-status-msg">
+                        Đã xử lý 2/3 file; bỏ qua trùng 0; lỗi 1. API người bệnh: 128 bản ghi.
+                      </p>
+                    </div>
+                  </div>
+                  <div class="mock-card">
+                    <div class="mock-table-head">
+                      <h4>Danh sách file XML</h4>
+                      <div class="mock-range">
+                        <span>Ngày xử lý</span>
+                        <input type="text" value="2026-07-06T00:00" readonly />
+                        <span>→</span>
+                        <input type="text" value="2026-07-10T23:59" readonly />
+                        <div class="mock-heading-actions">
+                          <span class="mock-btn ghost">⚙ Tham số</span>
+                          <span class="mock-btn enabled-teal" style="box-shadow:0 0 0 2px #0d8a7f33">👥 DS bệnh nhân</span>
+                          <span class="mock-btn primary">▶ Xử lý</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="mock-table-wrap">
+                      <table class="mock-table">
+                        <thead>
+                          <tr>
+                            <th>Tên file</th><th>Trạng thái</th><th>Ngày tạo</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td class="mock-file">HCM…_20260707_145000_…xml</td>
+                            <td><span class="mock-badge ok">Đã xử lý</span></td>
+                            <td>07/07/2026 14:50</td>
+                          </tr>
+                          <tr>
+                            <td class="mock-file">HCM…_20260708_101200_…xml</td>
+                            <td><span class="mock-badge wait">Chờ xử lý</span></td>
+                            <td>08/07/2026 10:12</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Modal overlay nằm ngoài mock-frame (tránh overflow:hidden cắt popup) -->
+          <div class="mock-modal-overlay" role="presentation" aria-hidden="false">
+            <div
+              class="mock-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="mock-patient-json-title"
+            >
+              <div class="mock-modal__header">
+                <div>
+                  <h4 id="mock-patient-json-title">
+                    <span class="icon" aria-hidden="true">👥</span>
+                    Danh sách bệnh nhân
+                  </h4>
+                  <p class="mock-modal__lead">
+                    JSON trả về từ API
+                    <code>/api/his/v1/nb-kham-ck-mat/nguoi-benh</code>
+                    — 128 bản ghi · 2026-07-06 00:00:00 → 2026-07-10 23:59:59
+                  </p>
+                </div>
+                <span class="mock-modal__close" title="Đóng" aria-label="Đóng">✕</span>
+              </div>
+              <p class="mock-modal__hint">
+                Lần lấy dữ liệu gần nhất: <strong>2026-07-15 10:42:18</strong>
+                · Lưu trong <em>phiên app</em> (tắt app → mất; nút disable lại đến lần Xử lý / auto-process tiếp theo)
+              </p>
+              <div class="mock-modal__body">
+                <div class="mock-json-toolbar">
+                  <span>Response JSON</span>
+                  <span class="mock-btn ghost" title="Copy toàn bộ JSON vào clipboard">📋 Copy JSON</span>
+                </div>
+<pre class="mock-json-view" tabindex="0" aria-label="JSON danh sách bệnh nhân (demo)">{
+<span class="jp">{</span>
+  <span class="jk">"code"</span><span class="jp">:</span> <span class="jn">0</span><span class="jp">,</span>
+  <span class="jk">"message"</span><span class="jp">:</span> <span class="js">"Success"</span><span class="jp">,</span>
+  <span class="jk">"data"</span><span class="jp">:</span> <span class="jp">[</span>
+    <span class="jp">{</span>
+      <span class="jk">"maHoSo"</span><span class="jp">:</span> <span class="js">"HCM2607070269"</span><span class="jp">,</span>
+      <span class="jk">"nbDotDieuTriId"</span><span class="jp">:</span> <span class="jn">1845021</span><span class="jp">,</span>
+      <span class="jk">"tenNb"</span><span class="jp">:</span> <span class="js">"Nguyễn Văn A"</span><span class="jp">,</span>
+      <span class="jk">"thoiGianVaoVien"</span><span class="jp">:</span> <span class="js">"2026-07-07 08:15:00"</span><span class="jp">,</span>
+      <span class="jk">"trangThai"</span><span class="jp">:</span> <span class="jn">10</span>
+    <span class="jp">},</span>
+    <span class="jp">{</span>
+      <span class="jk">"maHoSo"</span><span class="jp">:</span> <span class="js">"HCM2607080112"</span><span class="jp">,</span>
+      <span class="jk">"nbDotDieuTriId"</span><span class="jp">:</span> <span class="jn">1846103</span><span class="jp">,</span>
+      <span class="jk">"tenNb"</span><span class="jp">:</span> <span class="js">"Trần Thị B"</span><span class="jp">,</span>
+      <span class="jk">"thoiGianVaoVien"</span><span class="jp">:</span> <span class="js">"2026-07-08 09:02:33"</span><span class="jp">,</span>
+      <span class="jk">"trangThai"</span><span class="jp">:</span> <span class="jn">10</span>
+    <span class="jp">},</span>
+    <span class="jp">{</span>
+      <span class="jk">"maHoSo"</span><span class="jp">:</span> <span class="js">"VN2606003595"</span><span class="jp">,</span>
+      <span class="jk">"nbDotDieuTriId"</span><span class="jp">:</span> <span class="jn">1839901</span><span class="jp">,</span>
+      <span class="jk">"tenNb"</span><span class="jp">:</span> <span class="js">"Lê Văn C"</span><span class="jp">,</span>
+      <span class="jk">"thoiGianVaoVien"</span><span class="jp">:</span> <span class="js">"2026-07-06 14:40:00"</span><span class="jp">,</span>
+      <span class="jk">"trangThai"</span><span class="jp">:</span> <span class="jn">10</span>
+    <span class="jp">},</span>
+    <span class="jp">{</span>
+      <span class="jk">"maHoSo"</span><span class="jp">:</span> <span class="js">"HCM2607090044"</span><span class="jp">,</span>
+      <span class="jk">"nbDotDieuTriId"</span><span class="jp">:</span> <span class="jn">1847710</span><span class="jp">,</span>
+      <span class="jk">"tenNb"</span><span class="jp">:</span> <span class="js">"Phạm Thị D"</span><span class="jp">,</span>
+      <span class="jk">"thoiGianVaoVien"</span><span class="jp">:</span> <span class="js">"2026-07-09 11:20:18"</span><span class="jp">,</span>
+      <span class="jk">"trangThai"</span><span class="jp">:</span> <span class="jn">10</span>
+    <span class="jp">}</span>
+    <span class="jp">// … còn 124 bản ghi khác (scroll trong app thật)</span>
+  <span class="jp">]</span>
+<span class="jp">}</span>
+</pre>
+              </div>
+              <div class="mock-modal__footer">
+                <span class="mock-btn primary" style="margin-left:auto">Đóng</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="mock-callout-note">
+          <strong>Popup «Danh sách bệnh nhân»:</strong> bật sau khi
+          <code>GET /api/his/v1/nb-kham-ck-mat/nguoi-benh</code> thành công (nút
+          <strong>Xử lý</strong> hoặc auto-process). Body JSON pretty-print trong khung tối
+          (<code>patient-json-view</code>). Nút <strong>Copy JSON</strong> trên toolbar
+          copy toàn bộ response vào clipboard (feedback «Đã copy» ~2s).
+          Dữ liệu giữ trong memory phiên —
+          event <code>kr800:patient-list-ready</code> + command <code>get_last_patient_list</code>.
+        </p>
+        <div class="callout info" style="margin-top:0.85rem">
+          <div class="title">Luồng enable nút</div>
+          <ol style="margin:0.4rem 0 0;color:var(--muted);padding-left:1.2rem;font-size:0.9rem">
+            <li>Mở app → nút <strong>DS bệnh nhân</strong> <em>disable</em>.</li>
+            <li>Bấm <strong>Xử lý</strong> / auto-process → backend gọi API người bệnh với params đã cấu hình.</li>
+            <li>API OK → lưu raw JSON + emit event → nút <em>enable</em>.</li>
+            <li>Click nút → popup hiển thị JSON (như mockup trên).</li>
+          </ol>
+        </div>
       </div>
     </section>
 
@@ -1665,7 +2030,8 @@
       <p style="margin-top:0.35rem">
         Cập nhật: scan incremental · prune an toàn ·
         <code>list_xml_files(from, to)</code> ·
-        <code>folder_watch</code> · auto-process · <code>kr800:scan-progress</code> UI mockup.
+        <code>folder_watch</code> · auto-process · <code>kr800:scan-progress</code> ·
+        popup DS bệnh nhân (JSON) UI mockup.
       </p>
     </footer>
   </div>
@@ -1678,6 +2044,7 @@
         disk: document.getElementById("ui-disk"),
         index: document.getElementById("ui-index"),
         table: document.getElementById("ui-table"),
+        patients: document.getElementById("ui-patients"),
       };
       function show(key) {
         tabs.forEach(function (btn) {

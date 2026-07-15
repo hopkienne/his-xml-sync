@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import {
   ChevronDown,
   ChevronRight,
@@ -5,9 +6,19 @@ import {
   Loader2,
   Play,
   RefreshCw,
+  SlidersHorizontal,
+  Users,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { Kr800ScanProgressEvent, TrackedXmlFile, TrackedXmlStatus } from "../../types";
+import { getLastPatientList } from "../../lib/appCommands";
+import type {
+  Kr800ScanProgressEvent,
+  PatientListReadyEvent,
+  TrackedXmlFile,
+  TrackedXmlStatus,
+} from "../../types";
+import { PatientListDialog } from "./PatientListDialog";
+import { PatientParamsDialog } from "./PatientParamsDialog";
 
 const FOLDER_COLLAPSE_KEY = "his-xml-sync.kr800-folder-collapsed";
 const PROCESS_RANGE_KEY = "his-xml-sync.kr800-process-range";
@@ -81,6 +92,33 @@ export function Kr800Panel({
 }: Kr800PanelProps) {
   const [localRange, setLocalRange] = useState<ProcessDateRange>(loadStoredProcessRange);
   const processRange = controlledRange ?? localRange;
+  const [paramsOpen, setParamsOpen] = useState(false);
+  const [patientsOpen, setPatientsOpen] = useState(false);
+  /** Bật sau khi API danh sách người bệnh gọi thành công trong phiên app. */
+  const [patientListReady, setPatientListReady] = useState(false);
+  const [patientListMeta, setPatientListMeta] = useState<PatientListReadyEvent | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getLastPatientList().then((data) => {
+      if (cancelled || !data) return;
+      setPatientListReady(true);
+      setPatientListMeta({
+        patientCount: data.patientCount,
+        fromTime: data.fromTime,
+        toTime: data.toTime,
+        fetchedAt: data.fetchedAt,
+      });
+    });
+    const unlisten = listen<PatientListReadyEvent>("kr800:patient-list-ready", ({ payload }) => {
+      setPatientListReady(true);
+      setPatientListMeta(payload);
+    });
+    return () => {
+      cancelled = true;
+      void unlisten.then((dispose) => dispose());
+    };
+  }, []);
 
   const [folderCollapsed, setFolderCollapsed] = useState(() => {
     try {
@@ -345,20 +383,47 @@ export function Kr800Panel({
             ) : null}
           </div>
 
-          <button
-            type="button"
-            className="ds-button ds-button--primary kr800-process-button"
-            onClick={onProcess}
-            disabled={Boolean(processDisabledReason)}
-            title={processDisabledReason || "Bắt đầu luồng xử lý KR-800"}
-          >
-            {processPhase === "running" ? (
-              <Loader2 size={16} strokeWidth={2} className="spin" aria-hidden="true" />
-            ) : (
-              <Play size={16} strokeWidth={2} aria-hidden="true" />
-            )}
-            {processButtonLabel}
-          </button>
+          <div className="kr800-heading-actions">
+            <button
+              type="button"
+              className="ds-button ds-button--ghost"
+              onClick={() => setParamsOpen(true)}
+              title="Cấu hình query params API danh sách người bệnh"
+            >
+              <SlidersHorizontal size={16} strokeWidth={2} aria-hidden="true" />
+              Tham số
+            </button>
+            <button
+              type="button"
+              className="ds-button ds-button--ghost"
+              onClick={() => setPatientsOpen(true)}
+              disabled={!patientListReady}
+              title={
+                patientListReady
+                  ? patientListMeta
+                    ? `Xem JSON API người bệnh (${patientListMeta.patientCount.toLocaleString("vi-VN")} bản ghi)`
+                    : "Xem JSON API danh sách người bệnh"
+                  : "Chỉ bật sau khi gọi API danh sách bệnh nhân thành công (Xử lý / tự động xử lý)"
+              }
+            >
+              <Users size={16} strokeWidth={2} aria-hidden="true" />
+              Ds bệnh nhân
+            </button>
+            <button
+              type="button"
+              className="ds-button ds-button--primary kr800-process-button"
+              onClick={onProcess}
+              disabled={Boolean(processDisabledReason)}
+              title={processDisabledReason || "Bắt đầu luồng xử lý KR-800"}
+            >
+              {processPhase === "running" ? (
+                <Loader2 size={16} strokeWidth={2} className="spin" aria-hidden="true" />
+              ) : (
+                <Play size={16} strokeWidth={2} aria-hidden="true" />
+              )}
+              {processButtonLabel}
+            </button>
+          </div>
         </div>
 
         <div className="table-shell">
@@ -459,6 +524,13 @@ export function Kr800Panel({
           </table>
         </div>
       </div>
+
+      <PatientParamsDialog
+        open={paramsOpen}
+        onClose={() => setParamsOpen(false)}
+        processRange={processRange}
+      />
+      <PatientListDialog open={patientsOpen} onClose={() => setPatientsOpen(false)} />
     </section>
   );
 }
