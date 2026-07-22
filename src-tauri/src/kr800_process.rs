@@ -321,9 +321,18 @@ async fn process_claimed(
     emit_file_progress(app, db, file.id);
     set_stage(db, file.id, "sending").map_err(|error| ("send_error", error))?;
     emit_file_progress(app, db, file.id);
-    let response = send_update(db, state, client, settings, treatment_id, &payload, file.id)
-        .await
-        .map_err(|error| ("send_error", error))?;
+    let response = send_update(
+        db,
+        state,
+        client,
+        settings,
+        treatment_id,
+        &payload,
+        &payload_json,
+        file.id,
+    )
+    .await
+    .map_err(|error| ("send_error", error))?;
     finish_file(db, file.id, &response).map_err(|error| ("send_error", error))?;
     emit_file_progress(app, db, file.id);
     app_logger::info(
@@ -557,12 +566,20 @@ async fn send_update(
     settings: &AppSettings,
     treatment_id: i64,
     payload: &HisPayload,
+    payload_json: &str,
     file_id: i64,
 ) -> Result<String, String> {
     let url = format!(
         "{}/{}",
         his_api::join_url(&settings.his_api_url, UPDATE_PATH),
         treatment_id
+    );
+    app_logger::info(
+        "kr800",
+        &format!(
+            "file_id={} sending update treatment_id={} url={} body={}",
+            file_id, treatment_id, url, payload_json
+        ),
     );
     let mut token = ensure_token(db, state).await?;
     let mut auth_retried = false;
