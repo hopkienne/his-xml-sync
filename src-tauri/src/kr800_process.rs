@@ -570,7 +570,7 @@ async fn send_update(
     loop {
         increment_attempt(db, file_id)?;
         let response = client
-            .post(&url)
+            .put(&url)
             .bearer_auth(&token)
             .json(payload)
             .send()
