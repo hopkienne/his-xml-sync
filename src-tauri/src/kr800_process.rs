@@ -246,24 +246,38 @@ async fn process_inner(
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|error| format!("Không tạo được HTTP client: {error}"))?;
-    let patients =
-        patient_index(app, db, state, &client, &settings, from_time, to_time).await?;
 
+    // Queue trước: chỉ fetch patient-list range hiện tại khi có XML waiting.
     let waiting = waiting_files(db, from_time, to_time)?;
     let retry_pairs = measurement_pair::retryable_pairs(db)?;
     let total = waiting.len() + retry_pairs.len();
 
-    // 1) Xử lý file waiting (parse + ghép cặp; PUT khi đủ hai lần đo).
+    let batch_patients = if waiting.is_empty() {
+        Arc::new(PatientIndex::new())
+    } else {
+        patient_index(app, db, state, &client, &settings, from_time, to_time).await?
+    };
+
+    // 1) XML waiting — dùng patient index theo from/to batch.
     let file_outcomes = stream::iter(waiting.into_iter().map(|file| {
-        process_one_file(app, db, state, &client, &settings, &patients, catalog, file)
+        process_one_file(
+            app,
+            db,
+            state,
+            &client,
+            &settings,
+            &batch_patients,
+            catalog,
+            file,
+        )
     }))
     .buffer_unordered(MAX_CONCURRENT_PAIRS)
     .collect::<Vec<_>>()
     .await;
 
-    // 2) Retry cặp đã đủ hai file nhưng gửi lỗi trước đó (cùng pair/payload).
+    // 2) Retry pair: treatment đã lưu hoặc tra theo measured_at_1/2 (không mặc định ngày batch).
     let pair_outcomes = stream::iter(retry_pairs.into_iter().map(|pair_id| {
-        process_retry_pair(app, db, state, &client, &settings, &patients, catalog, pair_id)
+        process_retry_pair(app, db, state, &client, &settings, catalog, pair_id)
     }))
     .buffer_unordered(MAX_CONCURRENT_PAIRS)
     .collect::<Vec<_>>()
@@ -466,7 +480,6 @@ async fn process_retry_pair(
     state: &Kr800ProcessState,
     client: &Client,
     settings: &AppSettings,
-    patients: &PatientIndex,
     catalog: &Catalog,
     pair_id: i64,
 ) -> FileOutcome {
@@ -507,8 +520,10 @@ async fn process_retry_pair(
                 "kr800",
                 &format!("pair_id={pair_id} claim_pair_for_send: {error}"),
             );
-            // Cố gắng đưa pair ra khỏi trạng thái không nhất quán.
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error, &state.instance_id) {
+            // Claim chưa thành công → fail_pair với owner hiện tại thường no-op (CAS); log đủ.
+            if let Err(e) =
+                measurement_pair::fail_pair(db, pair_id, "send_error", &error, &state.instance_id)
+            {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail after claim err: {e}"));
             }
             return FileOutcome::default();
@@ -520,7 +535,9 @@ async fn process_retry_pair(
     let (payload, payload_json) = match resolve_payload_for_pair(db, catalog, &pair, id1, id2) {
         Ok(v) => v,
         Err(error) => {
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error, &state.instance_id) {
+            if let Err(e) =
+                measurement_pair::fail_pair(db, pair_id, "mapping_error", &error, &state.instance_id)
+            {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
             }
             emit_pair_progress(app, db, pair_id);
@@ -528,19 +545,21 @@ async fn process_retry_pair(
         }
     };
 
-    // Giữ treatment đã lưu nếu có; không đổi file/order.
-    let treatment_id = if let Some(tid) = pair.nb_dot_dieu_tri_id {
-        tid
-    } else {
-        match match_treatment(patients, &pair.patient_code) {
-            Ok(id) => id,
-            Err((status, message)) => {
-                if let Err(e) = measurement_pair::fail_pair(db, pair_id, status, &message, &state.instance_id) {
-                    app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
-                }
-                emit_pair_progress(app, db, pair_id);
-                return FileOutcome::default();
+    // Treatment: đã lưu → dùng luôn; chưa có → query theo measured_at_1/2 (không dùng ngày batch).
+    let treatment_id = match resolve_treatment_for_retry_pair(
+        app, db, state, client, settings, &pair,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err((status, message)) => {
+            if let Err(e) =
+                measurement_pair::fail_pair(db, pair_id, status, &message, &state.instance_id)
+            {
+                app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
             }
+            emit_pair_progress(app, db, pair_id);
+            return FileOutcome::default();
         }
     };
 
@@ -881,31 +900,120 @@ fn match_treatment(
     patients: &PatientIndex,
     patient_id: &str,
 ) -> Result<i64, (&'static str, String)> {
+    match_treatment_in_range(patients, patient_id, None)
+}
+
+fn match_treatment_in_range(
+    patients: &PatientIndex,
+    patient_id: &str,
+    query_range: Option<(&str, &str)>,
+) -> Result<i64, (&'static str, String)> {
     let key = measurement_pair::normalize_patient_code(patient_id);
+    let range_note = query_range
+        .map(|(from, to)| format!(" (query {from} → {to})"))
+        .unwrap_or_default();
     match patients.get(&key) {
         None => Err((
             "patient_not_found",
-            format!("Không tìm thấy bệnh nhân có mã hồ sơ {patient_id}."),
+            format!("Không tìm thấy bệnh nhân có mã hồ sơ {patient_id}{range_note}."),
         )),
         Some(values) if values.len() > 1 => Err((
             "treatment_ambiguous",
             format!(
-                "Tìm thấy {} đợt điều trị cho mã hồ sơ {}.",
+                "Tìm thấy {} đợt điều trị cho mã hồ sơ {}{range_note}.",
                 values.len(),
                 patient_id
             ),
         )),
         Some(values) if values.is_empty() => Err((
             "treatment_ambiguous",
-            format!("Bệnh nhân {patient_id} không có đợt điều trị."),
+            format!("Bệnh nhân {patient_id} không có đợt điều trị{range_note}."),
         )),
         Some(values) => values[0].ok_or_else(|| {
             (
                 "treatment_ambiguous",
-                format!("Bệnh nhân {patient_id} không có nbDotDieuTriId."),
+                format!("Bệnh nhân {patient_id} không có nbDotDieuTriId{range_note}."),
             )
         }),
     }
+}
+
+/// Khoảng patient-list từ measured_at_1/2: min day 00:00:00 → max day 23:59:59.
+/// Không fallback sang ngày hiện tại nếu thiếu/sai format.
+pub(crate) fn measurement_query_range_for_pair(
+    pair: &measurement_pair::PairRecord,
+) -> Result<(String, String), String> {
+    let at1 = pair.measured_at_1.as_deref().filter(|s| !s.trim().is_empty());
+    let at2 = pair.measured_at_2.as_deref().filter(|s| !s.trim().is_empty());
+    let (raw1, raw2) = match (at1, at2) {
+        (Some(a), Some(b)) => (a, b),
+        _ => {
+            return Err(format!(
+                "pair_id={} thiếu measured_at_1/2 (có {:?}, {:?}) — không fallback ngày hiện tại.",
+                pair.id, pair.measured_at_1, pair.measured_at_2
+            ));
+        }
+    };
+    let dt1 = chrono::NaiveDateTime::parse_from_str(raw1, "%Y-%m-%d %H:%M:%S").map_err(|_| {
+        format!(
+            "pair_id={} measured_at_1 không parse được: {raw1}",
+            pair.id
+        )
+    })?;
+    let dt2 = chrono::NaiveDateTime::parse_from_str(raw2, "%Y-%m-%d %H:%M:%S").map_err(|_| {
+        format!(
+            "pair_id={} measured_at_2 không parse được: {raw2}",
+            pair.id
+        )
+    })?;
+    let d_min = dt1.date().min(dt2.date());
+    let d_max = dt1.date().max(dt2.date());
+    let from = chrono::NaiveDateTime::new(
+        d_min,
+        chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap_or(chrono::NaiveTime::MIN),
+    );
+    let to = chrono::NaiveDateTime::new(
+        d_max,
+        chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap_or(chrono::NaiveTime::MIN),
+    );
+    Ok((
+        from.format("%Y-%m-%d %H:%M:%S").to_string(),
+        to.format("%Y-%m-%d %H:%M:%S").to_string(),
+    ))
+}
+
+/// Treatment cho retry: ưu tiên ID đã lưu; nếu thiếu → patient-list theo ngày đo pair.
+async fn resolve_treatment_for_retry_pair(
+    app: &AppHandle,
+    db: &AppDb,
+    state: &Kr800ProcessState,
+    client: &Client,
+    settings: &AppSettings,
+    pair: &measurement_pair::PairRecord,
+) -> Result<i64, (&'static str, String)> {
+    if let Some(tid) = pair.nb_dot_dieu_tri_id {
+        app_logger::info(
+            "kr800",
+            &format!(
+                "pair_id={} retry dùng nb_dot_dieu_tri_id đã lưu={tid} (không fetch patient-list ngày hiện tại)",
+                pair.id
+            ),
+        );
+        return Ok(tid);
+    }
+
+    let (from, to) = measurement_query_range_for_pair(pair).map_err(|e| ("mapping_error", e))?;
+    app_logger::info(
+        "kr800",
+        &format!(
+            "pair_id={} retry thiếu treatment — patient-list theo đo {} → {}",
+            pair.id, from, to
+        ),
+    );
+    let index = patient_index(app, db, state, client, settings, &from, &to)
+        .await
+        .map_err(|e| ("patient_not_found", e))?;
+    match_treatment_in_range(&index, &pair.patient_code, Some((&from, &to)))
 }
 
 pub async fn get_last_patient_list(state: &Kr800ProcessState) -> Option<PatientListSnapshot> {
@@ -1496,5 +1604,51 @@ mod tests {
             .sph_id,
             59
         );
+    }
+
+    #[test]
+    fn measurement_query_range_covers_midnight_span() {
+        let pair = measurement_pair::PairRecord {
+            id: 1,
+            patient_code: "HCM1".into(),
+            patient_code_norm: "hcm1".into(),
+            file_id_1: Some(1),
+            file_id_2: Some(2),
+            content_hash_1: Some("a".into()),
+            content_hash_2: Some("b".into()),
+            patient_no_1: Some(1),
+            patient_no_2: Some(2),
+            measured_at_1: Some("2026-07-15 23:58:00".into()),
+            measured_at_2: Some("2026-07-16 00:05:00".into()),
+            status: "send_error".into(),
+            request_payload: None,
+            nb_dot_dieu_tri_id: None,
+        };
+        let (from, to) = measurement_query_range_for_pair(&pair).expect("range");
+        assert_eq!(from, "2026-07-15 00:00:00");
+        assert_eq!(to, "2026-07-16 23:59:59");
+    }
+
+    #[test]
+    fn measurement_query_range_rejects_missing_times() {
+        let pair = measurement_pair::PairRecord {
+            id: 9,
+            patient_code: "X".into(),
+            patient_code_norm: "x".into(),
+            file_id_1: Some(1),
+            file_id_2: Some(2),
+            content_hash_1: None,
+            content_hash_2: None,
+            patient_no_1: None,
+            patient_no_2: None,
+            measured_at_1: None,
+            measured_at_2: Some("2026-07-16 00:05:00".into()),
+            status: "send_error".into(),
+            request_payload: None,
+            nb_dot_dieu_tri_id: None,
+        };
+        let err = measurement_query_range_for_pair(&pair).unwrap_err();
+        assert!(err.contains("thiếu measured_at"), "{err}");
+        assert!(!err.contains("2026-07-24"), "must not fallback to today");
     }
 }
