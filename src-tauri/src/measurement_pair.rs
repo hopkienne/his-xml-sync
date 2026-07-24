@@ -6,13 +6,78 @@
 //! - Một cặp có đúng hai content_hash khác nhau khi đầy đủ.
 //! - Claim/cập nhật hai file trong transaction để tránh double PUT.
 
+use crate::app_logger;
 use crate::db::AppDb;
-use crate::xml_parser::{format_measured_at, ParsedMeasurement};
+use crate::xml_parser::{format_measured_at, ParsedEye, ParsedMeasurement};
 use chrono::NaiveDateTime;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use serde::{Deserialize, Serialize};
 use std::sync::MutexGuard;
 
 pub const DEVICE_KEY: &str = "kr-800";
+
+/// Snapshot đã parse — nguồn duy nhất cho payload PUT (không đọc lại file mutable).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasurementSnapshot {
+    pub version: u32,
+    pub patient_id: String,
+    pub patient_no: i64,
+    pub measured_at: String,
+    pub content_hash: String,
+    pub right: EyeSnapshot,
+    pub left: EyeSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EyeSnapshot {
+    pub sphere: f64,
+    pub cylinder: f64,
+    pub axis: i64,
+}
+
+impl MeasurementSnapshot {
+    pub const VERSION: u32 = 1;
+
+    pub fn from_parsed(parsed: &ParsedMeasurement, content_hash: &str) -> Self {
+        Self {
+            version: Self::VERSION,
+            patient_id: parsed.patient_id.clone(),
+            patient_no: parsed.patient_no,
+            measured_at: format_measured_at(parsed.measured_at),
+            content_hash: content_hash.to_string(),
+            right: EyeSnapshot::from_eye(&parsed.right),
+            left: EyeSnapshot::from_eye(&parsed.left),
+        }
+    }
+
+    pub fn right_eye(&self) -> ParsedEye {
+        ParsedEye {
+            sphere: self.right.sphere,
+            cylinder: self.right.cylinder,
+            axis: self.right.axis,
+        }
+    }
+
+    pub fn left_eye(&self) -> ParsedEye {
+        ParsedEye {
+            sphere: self.left.sphere,
+            cylinder: self.left.cylinder,
+            axis: self.left.axis,
+        }
+    }
+}
+
+impl EyeSnapshot {
+    fn from_eye(eye: &ParsedEye) -> Self {
+        Self {
+            sphere: eye.sphere,
+            cylinder: eye.cylinder,
+            axis: eye.axis,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MeasurementMeta {
@@ -155,28 +220,209 @@ pub fn content_hash_already_measured(
     Ok(found.is_some())
 }
 
-pub fn save_measurement_meta(db: &AppDb, meta: &MeasurementMeta) -> Result<(), String> {
+/// Lưu metadata + snapshot parse atomic (một UPDATE).
+pub fn save_measurement_meta(
+    db: &AppDb,
+    meta: &MeasurementMeta,
+    parsed: &ParsedMeasurement,
+) -> Result<(), String> {
+    let snapshot = MeasurementSnapshot::from_parsed(parsed, &meta.content_hash);
+    let snapshot_json = serde_json::to_string(&snapshot)
+        .map_err(|e| format!("Serialize measurement_snapshot thất bại: {e}"))?;
     let conn = lock_conn(db)?;
-    conn.execute(
-        r#"
-        UPDATE xml_files SET
-          content_hash = ?1,
-          patient_code = ?2,
-          patient_no = ?3,
-          measured_at = ?4,
-          updated_at = datetime('now')
-        WHERE id = ?5
-        "#,
-        params![
-            meta.content_hash,
-            meta.patient_code,
-            meta.patient_no,
-            meta.measured_at,
+    let n = conn
+        .execute(
+            r#"
+            UPDATE xml_files SET
+              content_hash = ?1,
+              patient_code = ?2,
+              patient_no = ?3,
+              measured_at = ?4,
+              measurement_snapshot = ?5,
+              updated_at = datetime('now')
+            WHERE id = ?6
+            "#,
+            params![
+                meta.content_hash,
+                meta.patient_code,
+                meta.patient_no,
+                meta.measured_at,
+                snapshot_json,
+                meta.file_id
+            ],
+        )
+        .map_err(|e| format!("Lưu metadata+snapshot đo thất bại: {e}"))?;
+    if n != 1 {
+        return Err(format!(
+            "Lưu snapshot file_id={} thất bại: cập nhật {n} dòng (kỳ vọng 1).",
             meta.file_id
-        ],
-    )
-    .map_err(|e| format!("Lưu metadata đo thất bại: {e}"))?;
+        ));
+    }
     Ok(())
+}
+
+/// Đọc snapshot đã lưu; None nếu legacy chưa có.
+pub fn load_snapshot(db: &AppDb, file_id: i64) -> Result<Option<MeasurementSnapshot>, String> {
+    let conn = lock_conn(db)?;
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT measurement_snapshot FROM xml_files WHERE id = ?1",
+            params![file_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Đọc measurement_snapshot id={file_id}: {e}"))?;
+    match raw {
+        Some(json) if !json.trim().is_empty() => {
+            let snap: MeasurementSnapshot = serde_json::from_str(&json).map_err(|e| {
+                format!("measurement_snapshot id={file_id} JSON hỏng: {e}")
+            })?;
+            Ok(Some(snap))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Meta đã lưu trên pair cho một file (dùng kiểm tra legacy rehydrate).
+#[derive(Debug, Clone)]
+pub struct ExpectedFileMeta {
+    pub content_hash: String,
+    pub patient_code: String,
+    pub patient_no: i64,
+    pub measured_at: String,
+}
+
+/// Lấy snapshot; nếu thiếu thì rehydrate từ disk **chỉ khi** hash + meta khớp pair.
+/// Không bao giờ dùng nội dung file đã đổi để PUT cho pair cũ.
+pub fn load_or_rehydrate_snapshot(
+    db: &AppDb,
+    file_id: i64,
+    expected: &ExpectedFileMeta,
+) -> Result<MeasurementSnapshot, String> {
+    if let Some(snap) = load_snapshot(db, file_id)? {
+        verify_snapshot_matches_expected(&snap, expected, file_id)?;
+        return Ok(snap);
+    }
+
+    // Legacy: đọc file, verify hash + meta, rồi persist snapshot.
+    let path = file_path_by_id(db, file_id)?;
+    let bytes = std::fs::read(&path).map_err(|e| {
+        format!("Legacy rehydrate: không đọc được file id={file_id} path={path}: {e}")
+    })?;
+    let hash = {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(&bytes))
+    };
+    if hash != expected.content_hash {
+        return Err(format!(
+            "File id={file_id} đã thay đổi trên disk: content_hash DB={} ≠ file hiện tại={hash}. Không PUT.",
+            expected.content_hash
+        ));
+    }
+    let parsed = crate::xml_parser::parse_measurement(&bytes).map_err(|e| {
+        format!("Legacy rehydrate: parse XML id={file_id} thất bại: {e}")
+    })?;
+    let measured_at = format_measured_at(parsed.measured_at);
+    let mut mismatches = Vec::new();
+    if normalize_patient_code(&parsed.patient_id) != normalize_patient_code(&expected.patient_code)
+    {
+        mismatches.push(format!(
+            "Patient.ID DB={} file={}",
+            expected.patient_code, parsed.patient_id
+        ));
+    }
+    if parsed.patient_no != expected.patient_no {
+        mismatches.push(format!(
+            "Patient.No. DB={} file={}",
+            expected.patient_no, parsed.patient_no
+        ));
+    }
+    if measured_at != expected.measured_at {
+        mismatches.push(format!(
+            "measuredAt DB={} file={}",
+            expected.measured_at, measured_at
+        ));
+    }
+    if !mismatches.is_empty() {
+        return Err(format!(
+            "File id={file_id} metadata không khớp pair (hash OK nhưng meta lệch): {}",
+            mismatches.join("; ")
+        ));
+    }
+
+    let meta = MeasurementMeta {
+        file_id,
+        patient_code: parsed.patient_id.clone(),
+        patient_code_norm: normalize_patient_code(&parsed.patient_id),
+        patient_no: parsed.patient_no,
+        measured_at,
+        content_hash: hash,
+    };
+    save_measurement_meta(db, &meta, &parsed)?;
+    load_snapshot(db, file_id)?.ok_or_else(|| {
+        format!("Legacy rehydrate: lưu snapshot id={file_id} xong nhưng không đọc lại được.")
+    })
+}
+
+fn verify_snapshot_matches_expected(
+    snap: &MeasurementSnapshot,
+    expected: &ExpectedFileMeta,
+    file_id: i64,
+) -> Result<(), String> {
+    let mut mismatches = Vec::new();
+    if snap.content_hash != expected.content_hash {
+        mismatches.push(format!(
+            "content_hash snap={} expected={}",
+            snap.content_hash, expected.content_hash
+        ));
+    }
+    if normalize_patient_code(&snap.patient_id) != normalize_patient_code(&expected.patient_code) {
+        mismatches.push(format!(
+            "Patient.ID snap={} expected={}",
+            snap.patient_id, expected.patient_code
+        ));
+    }
+    if snap.patient_no != expected.patient_no {
+        mismatches.push(format!(
+            "Patient.No. snap={} expected={}",
+            snap.patient_no, expected.patient_no
+        ));
+    }
+    if snap.measured_at != expected.measured_at {
+        mismatches.push(format!(
+            "measuredAt snap={} expected={}",
+            snap.measured_at, expected.measured_at
+        ));
+    }
+    if mismatches.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Snapshot file id={file_id} không khớp pair: {}",
+            mismatches.join("; ")
+        ))
+    }
+}
+
+fn file_path_by_id(db: &AppDb, file_id: i64) -> Result<String, String> {
+    let conn = lock_conn(db)?;
+    conn.query_row(
+        "SELECT file_path FROM xml_files WHERE id = ?1",
+        params![file_id],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("Đọc file_path id={file_id}: {e}"))
+}
+
+fn transition_log(
+    pair_id: i64,
+    transition: &str,
+    from: &str,
+    to: &str,
+    cause: &str,
+) -> String {
+    format!(
+        "pair_id={pair_id} transition={transition} from={from} to={to} rollback: {cause}"
+    )
 }
 
 /// Transaction: gắn file vào cặp chờ hoặc hoàn tất cặp khi đủ hai lần đo.
@@ -577,15 +823,128 @@ fn load_meta(tx: &Transaction<'_>, file_id: i64) -> Result<MeasurementMeta, Stri
     .map_err(|e| format!("Đọc metadata file id={file_id} thất bại: {e}"))
 }
 
-/// Claim cặp để gửi HIS — chỉ một task thắng.
+/// Gọi ngay sau khi pipeline giữ `run_lock`: mọi pair `sending` còn sót là orphan
+/// (crash/kill giữa chừng) → chuyển `send_error` atomic để retry cùng pair/payload.
+///
+/// Mỗi pair recover trong transaction riêng — một pair hỏng không chặn các pair khác.
+pub fn recover_orphaned_sending_pairs(db: &AppDb) -> Result<usize, String> {
+    let orphans: Vec<(i64, Option<i64>, Option<i64>, String)> = {
+        let conn = lock_conn(db)?;
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT id, file_id_1, file_id_2, status
+                FROM measurement_pairs
+                WHERE device_key = ?1 AND status = 'sending'
+                "#,
+            )
+            .map_err(|e| format!("recover_orphaned_sending prepare: {e}"))?;
+        let rows = stmt
+            .query_map(params![DEVICE_KEY], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| format!("recover_orphaned_sending query: {e}"))?;
+        let mut list = Vec::new();
+        for row in rows {
+            list.push(row.map_err(|e| format!("recover_orphaned_sending row: {e}"))?);
+        }
+        list
+    };
+
+    let mut recovered = 0usize;
+    let message =
+        "Phục hồi sau gửi bị gián đoạn (sending orphan) — sẽ retry cùng pair/payload.";
+    for (pair_id, f1, f2, from_status) in orphans {
+        let mut conn = lock_conn(db)?;
+        let tx = conn.transaction().map_err(|e| {
+            format!("recover_orphaned_sending pair_id={pair_id} begin tx: {e}")
+        })?;
+        // Re-check status trong tx (tránh race nếu có).
+        let still_sending: bool = tx
+            .query_row(
+                "SELECT status FROM measurement_pairs WHERE id = ?1",
+                params![pair_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| format!("recover recheck pair_id={pair_id}: {e}"))?
+            .map(|s| s == "sending")
+            .unwrap_or(false);
+        if !still_sending {
+            tx.commit().ok();
+            continue;
+        }
+        match apply_pair_and_two_files_status(
+            &tx,
+            pair_id,
+            f1,
+            f2,
+            &from_status,
+            "send_error",
+            message,
+            "recover_orphaned_sending",
+            false,
+            true,
+        ) {
+            Ok(()) => {
+                tx.commit().map_err(|e| {
+                    format!("recover_orphaned_sending pair_id={pair_id} commit: {e}")
+                })?;
+                recovered += 1;
+                app_logger::warn(
+                    "kr800",
+                    &format!(
+                        "pair_id={pair_id} recovered orphaned sending → send_error (file1={:?} file2={:?})",
+                        f1, f2
+                    ),
+                );
+            }
+            Err(error) => {
+                // Rollback pair này; tiếp tục pair khác.
+                drop(tx);
+                app_logger::error(
+                    "kr800",
+                    &format!("pair_id={pair_id} recover orphaned failed: {error}"),
+                );
+            }
+        }
+    }
+    Ok(recovered)
+}
+
+/// Claim cặp để gửi HIS — transaction; chỉ một task thắng.
+/// Không claim pair đang `sending` hợp lệ (task khác); orphan đã được recover trước đó.
 pub fn claim_pair_for_send(db: &AppDb, pair_id: i64) -> Result<bool, String> {
-    let conn = lock_conn(db)?;
-    let changed = conn
+    let mut conn = lock_conn(db)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("claim_pair begin tx thất bại: {e}"))?;
+
+    let pair = load_pair(&tx, pair_id)?
+        .ok_or_else(|| format!("claim_pair: không tìm thấy pair_id={pair_id}"))?;
+    let from = pair.status.clone();
+    let (Some(id1), Some(id2)) = (pair.file_id_1, pair.file_id_2) else {
+        return Err(transition_log(
+            pair_id,
+            "claim_pair",
+            &from,
+            "sending",
+            "thiếu file_id_1 hoặc file_id_2",
+        ));
+    };
+
+    let changed = tx
         .execute(
             r#"
             UPDATE measurement_pairs SET
               status = 'sending',
               error_message = NULL,
+              sending_started_at = datetime('now'),
               updated_at = datetime('now')
             WHERE id = ?1
               AND status IN (
@@ -595,21 +954,59 @@ pub fn claim_pair_for_send(db: &AppDb, pair_id: i64) -> Result<bool, String> {
             "#,
             params![pair_id],
         )
-        .map_err(|e| format!("Claim pair id={pair_id} thất bại: {e}"))?;
-    if changed == 1 {
-        conn.execute(
+        .map_err(|e| {
+            transition_log(pair_id, "claim_pair", &from, "sending", &format!("SQL pair: {e}"))
+        })?;
+
+    if changed == 0 {
+        tx.commit()
+            .map_err(|e| format!("claim_pair commit (no-op) thất bại: {e}"))?;
+        return Ok(false);
+    }
+    if changed != 1 {
+        return Err(transition_log(
+            pair_id,
+            "claim_pair",
+            &from,
+            "sending",
+            &format!("pair UPDATE rows={changed}"),
+        ));
+    }
+
+    let files = tx
+        .execute(
             r#"
             UPDATE xml_files SET
               status = 'sending',
               error_message = NULL,
               updated_at = datetime('now')
-            WHERE pair_id = ?1
+            WHERE pair_id = ?1 AND id IN (?2, ?3)
             "#,
-            params![pair_id],
+            params![pair_id, id1, id2],
         )
-        .map_err(|e| format!("Claim files of pair thất bại: {e}"))?;
+        .map_err(|e| {
+            transition_log(
+                pair_id,
+                "claim_pair",
+                &from,
+                "sending",
+                &format!("SQL xml_files: {e}"),
+            )
+        })?;
+    if files != 2 {
+        return Err(transition_log(
+            pair_id,
+            "claim_pair",
+            &from,
+            "sending",
+            &format!("xml_files UPDATE rows={files} (kỳ vọng 2; id1={id1} id2={id2})"),
+        ));
     }
-    Ok(changed == 1)
+    assert_exactly_two_files_for_pair(&tx, pair_id, id1, id2, "claim_pair", &from, "sending")?;
+
+    tx.commit()
+        .map_err(|e| transition_log(pair_id, "claim_pair", &from, "sending", &format!("commit: {e}")))?;
+    Ok(true)
 }
 
 pub fn save_pair_request(
@@ -618,118 +1015,358 @@ pub fn save_pair_request(
     treatment_id: i64,
     payload_json: &str,
 ) -> Result<(), String> {
-    let conn = lock_conn(db)?;
-    conn.execute(
-        r#"
-        UPDATE measurement_pairs SET
-          nb_dot_dieu_tri_id = ?1,
-          request_payload = ?2,
-          status = 'sending',
-          updated_at = datetime('now')
-        WHERE id = ?3
-        "#,
-        params![treatment_id, payload_json, pair_id],
-    )
-    .map_err(|e| format!("Lưu request pair thất bại: {e}"))?;
-    conn.execute(
-        r#"
-        UPDATE xml_files SET
-          nb_dot_dieu_tri_id = ?1,
-          request_payload = ?2,
-          status = 'sending',
-          updated_at = datetime('now')
-        WHERE pair_id = ?3
-        "#,
-        params![treatment_id, payload_json, pair_id],
-    )
-    .map_err(|e| format!("Lưu request files pair thất bại: {e}"))?;
+    let mut conn = lock_conn(db)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("save_pair_request begin tx: {e}"))?;
+    let pair = load_pair(&tx, pair_id)?
+        .ok_or_else(|| format!("save_pair_request: thiếu pair_id={pair_id}"))?;
+    let from = pair.status.clone();
+    let (Some(id1), Some(id2)) = (pair.file_id_1, pair.file_id_2) else {
+        return Err(transition_log(
+            pair_id,
+            "save_pair_request",
+            &from,
+            "sending",
+            "thiếu file_id_1/2",
+        ));
+    };
+
+    let n = tx
+        .execute(
+            r#"
+            UPDATE measurement_pairs SET
+              nb_dot_dieu_tri_id = ?1,
+              request_payload = ?2,
+              status = 'sending',
+              updated_at = datetime('now')
+            WHERE id = ?3 AND status = 'sending'
+            "#,
+            params![treatment_id, payload_json, pair_id],
+        )
+        .map_err(|e| {
+            transition_log(
+                pair_id,
+                "save_pair_request",
+                &from,
+                "sending",
+                &format!("SQL pair: {e}"),
+            )
+        })?;
+    if n != 1 {
+        return Err(transition_log(
+            pair_id,
+            "save_pair_request",
+            &from,
+            "sending",
+            &format!("pair UPDATE rows={n} (cần status=sending)"),
+        ));
+    }
+
+    let files = tx
+        .execute(
+            r#"
+            UPDATE xml_files SET
+              nb_dot_dieu_tri_id = ?1,
+              request_payload = ?2,
+              status = 'sending',
+              updated_at = datetime('now')
+            WHERE pair_id = ?3 AND id IN (?4, ?5)
+            "#,
+            params![treatment_id, payload_json, pair_id, id1, id2],
+        )
+        .map_err(|e| {
+            transition_log(
+                pair_id,
+                "save_pair_request",
+                &from,
+                "sending",
+                &format!("SQL xml: {e}"),
+            )
+        })?;
+    if files != 2 {
+        return Err(transition_log(
+            pair_id,
+            "save_pair_request",
+            &from,
+            "sending",
+            &format!("xml_files UPDATE rows={files}"),
+        ));
+    }
+    assert_exactly_two_files_for_pair(&tx, pair_id, id1, id2, "save_pair_request", &from, "sending")?;
+    tx.commit().map_err(|e| {
+        transition_log(
+            pair_id,
+            "save_pair_request",
+            &from,
+            "sending",
+            &format!("commit: {e}"),
+        )
+    })?;
     Ok(())
 }
 
+/// Chỉ Ok khi pair + đúng hai XML đã `processed` (cùng transaction).
 pub fn finish_pair_success(db: &AppDb, pair_id: i64, response: &str) -> Result<(), String> {
-    let conn = lock_conn(db)?;
-    conn.execute(
-        r#"
-        UPDATE measurement_pairs SET
-          status = 'processed',
-          error_message = NULL,
-          response_payload = ?1,
-          processed_at = datetime('now'),
-          updated_at = datetime('now')
-        WHERE id = ?2
-        "#,
-        params![response, pair_id],
-    )
-    .map_err(|e| format!("Hoàn tất pair thất bại: {e}"))?;
-    conn.execute(
-        r#"
-        UPDATE xml_files SET
-          status = 'processed',
-          error_message = NULL,
-          response_payload = ?1,
-          processed_at = datetime('now'),
-          updated_at = datetime('now')
-        WHERE pair_id = ?2
-        "#,
-        params![response, pair_id],
-    )
-    .map_err(|e| format!("Hoàn tất files pair thất bại: {e}"))?;
+    let mut conn = lock_conn(db)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("finish_pair_success begin tx: {e}"))?;
+    let pair = load_pair(&tx, pair_id)?
+        .ok_or_else(|| format!("finish_pair_success: thiếu pair_id={pair_id}"))?;
+    let from = pair.status.clone();
+    let (Some(id1), Some(id2)) = (pair.file_id_1, pair.file_id_2) else {
+        return Err(transition_log(
+            pair_id,
+            "finish_pair_success",
+            &from,
+            "processed",
+            "thiếu file_id_1/2",
+        ));
+    };
+
+    let n = tx
+        .execute(
+            r#"
+            UPDATE measurement_pairs SET
+              status = 'processed',
+              error_message = NULL,
+              response_payload = ?1,
+              sending_started_at = NULL,
+              processed_at = datetime('now'),
+              updated_at = datetime('now')
+            WHERE id = ?2 AND status = 'sending'
+            "#,
+            params![response, pair_id],
+        )
+        .map_err(|e| {
+            transition_log(
+                pair_id,
+                "finish_pair_success",
+                &from,
+                "processed",
+                &format!("SQL pair: {e}"),
+            )
+        })?;
+    if n != 1 {
+        return Err(transition_log(
+            pair_id,
+            "finish_pair_success",
+            &from,
+            "processed",
+            &format!("pair UPDATE rows={n} (cần status=sending)"),
+        ));
+    }
+
+    let files = tx
+        .execute(
+            r#"
+            UPDATE xml_files SET
+              status = 'processed',
+              error_message = NULL,
+              response_payload = ?1,
+              processed_at = datetime('now'),
+              updated_at = datetime('now')
+            WHERE pair_id = ?2 AND id IN (?3, ?4)
+            "#,
+            params![response, pair_id, id1, id2],
+        )
+        .map_err(|e| {
+            transition_log(
+                pair_id,
+                "finish_pair_success",
+                &from,
+                "processed",
+                &format!("SQL xml: {e}"),
+            )
+        })?;
+    if files != 2 {
+        return Err(transition_log(
+            pair_id,
+            "finish_pair_success",
+            &from,
+            "processed",
+            &format!("xml_files UPDATE rows={files}"),
+        ));
+    }
+    assert_exactly_two_files_for_pair(
+        &tx,
+        pair_id,
+        id1,
+        id2,
+        "finish_pair_success",
+        &from,
+        "processed",
+    )?;
+
+    // Xác nhận trạng thái sau update trong cùng tx.
+    let pair_status: String = tx
+        .query_row(
+            "SELECT status FROM measurement_pairs WHERE id = ?1",
+            params![pair_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("finish verify pair: {e}"))?;
+    if pair_status != "processed" {
+        return Err(transition_log(
+            pair_id,
+            "finish_pair_success",
+            &from,
+            "processed",
+            &format!("pair status sau update = {pair_status}"),
+        ));
+    }
+    let processed_files: i64 = tx
+        .query_row(
+            r#"
+            SELECT COUNT(*) FROM xml_files
+            WHERE pair_id = ?1 AND id IN (?2, ?3) AND status = 'processed'
+            "#,
+            params![pair_id, id1, id2],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("finish verify files: {e}"))?;
+    if processed_files != 2 {
+        return Err(transition_log(
+            pair_id,
+            "finish_pair_success",
+            &from,
+            "processed",
+            &format!("chỉ {processed_files}/2 file processed"),
+        ));
+    }
+
+    tx.commit().map_err(|e| {
+        transition_log(
+            pair_id,
+            "finish_pair_success",
+            &from,
+            "processed",
+            &format!("commit: {e}"),
+        )
+    })?;
     Ok(())
 }
 
 pub fn fail_pair(db: &AppDb, pair_id: i64, status: &str, message: &str) -> Result<(), String> {
-    let conn = lock_conn(db)?;
-    conn.execute(
-        r#"
-        UPDATE measurement_pairs SET
-          status = ?1,
-          error_message = ?2,
-          updated_at = datetime('now')
-        WHERE id = ?3
-        "#,
-        params![status, message, pair_id],
-    )
-    .map_err(|e| format!("Lưu lỗi pair thất bại: {e}"))?;
-    conn.execute(
-        r#"
-        UPDATE xml_files SET
-          status = ?1,
-          error_message = ?2,
-          updated_at = datetime('now')
-        WHERE pair_id = ?3
-        "#,
-        params![status, message, pair_id],
-    )
-    .map_err(|e| format!("Lưu lỗi files pair thất bại: {e}"))?;
+    let mut conn = lock_conn(db)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("fail_pair begin tx: {e}"))?;
+    let pair = load_pair(&tx, pair_id)?
+        .ok_or_else(|| format!("fail_pair: thiếu pair_id={pair_id}"))?;
+    let from = pair.status.clone();
+    apply_pair_and_two_files_status(
+        &tx,
+        pair_id,
+        pair.file_id_1,
+        pair.file_id_2,
+        &from,
+        status,
+        message,
+        "fail_pair",
+        false,
+        true,
+    )?;
+    tx.commit().map_err(|e| {
+        transition_log(
+            pair_id,
+            "fail_pair",
+            &from,
+            status,
+            &format!("commit: {e}"),
+        )
+    })?;
     Ok(())
 }
 
 pub fn increment_pair_attempt(db: &AppDb, pair_id: i64) -> Result<(), String> {
-    let conn = lock_conn(db)?;
-    conn.execute(
-        r#"
-        UPDATE measurement_pairs SET
-          attempt_count = attempt_count + 1,
-          updated_at = datetime('now')
-        WHERE id = ?1
-        "#,
-        params![pair_id],
-    )
-    .map_err(|e| format!("Tăng attempt_count pair thất bại: {e}"))?;
-    conn.execute(
-        r#"
-        UPDATE xml_files SET
-          attempt_count = attempt_count + 1,
-          updated_at = datetime('now')
-        WHERE pair_id = ?1
-        "#,
-        params![pair_id],
-    )
-    .map_err(|e| format!("Tăng attempt_count files pair thất bại: {e}"))?;
+    let mut conn = lock_conn(db)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("increment_pair_attempt begin tx: {e}"))?;
+    let pair = load_pair(&tx, pair_id)?
+        .ok_or_else(|| format!("increment_pair_attempt: thiếu pair_id={pair_id}"))?;
+    let from = pair.status.clone();
+    let (Some(id1), Some(id2)) = (pair.file_id_1, pair.file_id_2) else {
+        return Err(transition_log(
+            pair_id,
+            "increment_pair_attempt",
+            &from,
+            &from,
+            "thiếu file_id_1/2",
+        ));
+    };
+
+    let n = tx
+        .execute(
+            r#"
+            UPDATE measurement_pairs SET
+              attempt_count = attempt_count + 1,
+              updated_at = datetime('now')
+            WHERE id = ?1 AND status = 'sending'
+            "#,
+            params![pair_id],
+        )
+        .map_err(|e| {
+            transition_log(
+                pair_id,
+                "increment_pair_attempt",
+                &from,
+                "sending",
+                &format!("SQL pair: {e}"),
+            )
+        })?;
+    if n != 1 {
+        return Err(transition_log(
+            pair_id,
+            "increment_pair_attempt",
+            &from,
+            "sending",
+            &format!("pair UPDATE rows={n}"),
+        ));
+    }
+    let files = tx
+        .execute(
+            r#"
+            UPDATE xml_files SET
+              attempt_count = attempt_count + 1,
+              updated_at = datetime('now')
+            WHERE pair_id = ?1 AND id IN (?2, ?3)
+            "#,
+            params![pair_id, id1, id2],
+        )
+        .map_err(|e| {
+            transition_log(
+                pair_id,
+                "increment_pair_attempt",
+                &from,
+                "sending",
+                &format!("SQL xml: {e}"),
+            )
+        })?;
+    if files != 2 {
+        return Err(transition_log(
+            pair_id,
+            "increment_pair_attempt",
+            &from,
+            "sending",
+            &format!("xml_files UPDATE rows={files}"),
+        ));
+    }
+    tx.commit().map_err(|e| {
+        transition_log(
+            pair_id,
+            "increment_pair_attempt",
+            &from,
+            "sending",
+            &format!("commit: {e}"),
+        )
+    })?;
     Ok(())
 }
 
-/// Cặp cần retry gửi (giữ nguyên hai file + payload nếu có).
+/// Cặp cần retry (không gồm `sending` đang live — orphan đã recover → send_error).
 pub fn retryable_pairs(db: &AppDb) -> Result<Vec<i64>, String> {
     let conn = lock_conn(db)?;
     let mut stmt = conn
@@ -755,6 +1392,204 @@ pub fn retryable_pairs(db: &AppDb) -> Result<Vec<i64>, String> {
         ids.push(row.map_err(|e| format!("Map pair id thất bại: {e}"))?);
     }
     Ok(ids)
+}
+
+/// Cập nhật status pair + đúng 2 XML trong transaction đang mở.
+fn apply_pair_and_two_files_status(
+    tx: &Transaction<'_>,
+    pair_id: i64,
+    file_id_1: Option<i64>,
+    file_id_2: Option<i64>,
+    from: &str,
+    to_status: &str,
+    message: &str,
+    transition: &str,
+    _require_from_sending: bool,
+    clear_sending_started: bool,
+) -> Result<(), String> {
+    let pair_sql = if clear_sending_started {
+        r#"
+        UPDATE measurement_pairs SET
+          status = ?1,
+          error_message = ?2,
+          sending_started_at = NULL,
+          updated_at = datetime('now')
+        WHERE id = ?3
+        "#
+    } else {
+        r#"
+        UPDATE measurement_pairs SET
+          status = ?1,
+          error_message = ?2,
+          updated_at = datetime('now')
+        WHERE id = ?3
+        "#
+    };
+    let n = tx
+        .execute(pair_sql, params![to_status, message, pair_id])
+        .map_err(|e| {
+            transition_log(
+                pair_id,
+                transition,
+                from,
+                to_status,
+                &format!("SQL pair: {e}"),
+            )
+        })?;
+    if n != 1 {
+        return Err(transition_log(
+            pair_id,
+            transition,
+            from,
+            to_status,
+            &format!("pair UPDATE rows={n}"),
+        ));
+    }
+
+    match (file_id_1, file_id_2) {
+        (Some(id1), Some(id2)) => {
+            let files = tx
+                .execute(
+                    r#"
+                    UPDATE xml_files SET
+                      status = ?1,
+                      error_message = ?2,
+                      updated_at = datetime('now')
+                    WHERE pair_id = ?3 AND id IN (?4, ?5)
+                    "#,
+                    params![to_status, message, pair_id, id1, id2],
+                )
+                .map_err(|e| {
+                    transition_log(
+                        pair_id,
+                        transition,
+                        from,
+                        to_status,
+                        &format!("SQL xml: {e}"),
+                    )
+                })?;
+            if files != 2 {
+                return Err(transition_log(
+                    pair_id,
+                    transition,
+                    from,
+                    to_status,
+                    &format!("xml_files UPDATE rows={files} (kỳ vọng 2)"),
+                ));
+            }
+            assert_exactly_two_files_for_pair(
+                tx, pair_id, id1, id2, transition, from, to_status,
+            )?;
+        }
+        _ => {
+            // Pair chưa đủ 2 file (awaiting) — cập nhật mọi XML gắn pair_id.
+            tx.execute(
+                r#"
+                UPDATE xml_files SET
+                  status = ?1,
+                  error_message = ?2,
+                  updated_at = datetime('now')
+                WHERE pair_id = ?3
+                "#,
+                params![to_status, message, pair_id],
+            )
+            .map_err(|e| {
+                transition_log(
+                    pair_id,
+                    transition,
+                    from,
+                    to_status,
+                    &format!("SQL xml partial: {e}"),
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn assert_exactly_two_files_for_pair(
+    tx: &Transaction<'_>,
+    pair_id: i64,
+    id1: i64,
+    id2: i64,
+    transition: &str,
+    from: &str,
+    to: &str,
+) -> Result<(), String> {
+    let count: i64 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM xml_files WHERE pair_id = ?1",
+            params![pair_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| {
+            transition_log(pair_id, transition, from, to, &format!("count pair files: {e}"))
+        })?;
+    if count != 2 {
+        return Err(transition_log(
+            pair_id,
+            transition,
+            from,
+            to,
+            &format!("invariant: {count} XML gắn pair (kỳ vọng 2)"),
+        ));
+    }
+    // Không được trùng pair_id trên file khác id1/id2 đã được count; kiểm tra hai id thuộc pair.
+    for id in [id1, id2] {
+        let ok: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM xml_files WHERE id = ?1 AND pair_id = ?2",
+                params![id, pair_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| transition_log(pair_id, transition, from, to, &format!("check id={id}: {e}")))?;
+        if ok.is_none() {
+            return Err(transition_log(
+                pair_id,
+                transition,
+                from,
+                to,
+                &format!("file id={id} không thuộc pair"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Expected meta từ pair record cho file theo order 1/2.
+pub fn expected_meta_for_order(pair: &PairRecord, order: u8) -> Result<ExpectedFileMeta, String> {
+    match order {
+        1 => Ok(ExpectedFileMeta {
+            content_hash: pair
+                .content_hash_1
+                .clone()
+                .ok_or_else(|| format!("pair {} thiếu content_hash_1", pair.id))?,
+            patient_code: pair.patient_code.clone(),
+            patient_no: pair
+                .patient_no_1
+                .ok_or_else(|| format!("pair {} thiếu patient_no_1", pair.id))?,
+            measured_at: pair
+                .measured_at_1
+                .clone()
+                .ok_or_else(|| format!("pair {} thiếu measured_at_1", pair.id))?,
+        }),
+        2 => Ok(ExpectedFileMeta {
+            content_hash: pair
+                .content_hash_2
+                .clone()
+                .ok_or_else(|| format!("pair {} thiếu content_hash_2", pair.id))?,
+            patient_code: pair.patient_code.clone(),
+            patient_no: pair
+                .patient_no_2
+                .ok_or_else(|| format!("pair {} thiếu patient_no_2", pair.id))?,
+            measured_at: pair
+                .measured_at_2
+                .clone()
+                .ok_or_else(|| format!("pair {} thiếu measured_at_2", pair.id))?,
+        }),
+        _ => Err(format!("order không hợp lệ: {order}")),
+    }
 }
 
 fn lock_conn(db: &AppDb) -> Result<MutexGuard<'_, Connection>, String> {
@@ -792,6 +1627,32 @@ mod tests {
         }
     }
 
+    fn dummy_parsed(code: &str, no: i64, at: &str) -> ParsedMeasurement {
+        let measured_at =
+            NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S").expect("test datetime");
+        ParsedMeasurement {
+            patient_id: code.into(),
+            patient_no: no,
+            measured_at,
+            right: ParsedEye {
+                sphere: 0.25,
+                cylinder: -1.0,
+                axis: 165,
+            },
+            left: ParsedEye {
+                sphere: 1.25,
+                cylinder: -1.75,
+                axis: 176,
+            },
+            machine_no: None,
+        }
+    }
+
+    fn save_meta(db: &AppDb, m: &MeasurementMeta) {
+        let parsed = dummy_parsed(&m.patient_code, m.patient_no, &m.measured_at);
+        save_measurement_meta(db, m, &parsed).unwrap();
+    }
+
     #[test]
     fn orders_by_measured_at_and_patient_no_not_arrival() {
         let early = meta(2, "HCM1", 10, "2026-07-15 10:00:00", "h1");
@@ -818,7 +1679,7 @@ mod tests {
             insert_waiting(&conn, "/tmp/a", "2026-07-15 15:12:40")
         };
         let m = meta(id, "HCM2607150275", 1694, "2026-07-15 15:12:40", "hash1");
-        save_measurement_meta(&db, &m).unwrap();
+        save_meta(&db, &m);
         match resolve_pair_for_measurement(&db, &m).unwrap() {
             PairResolve::AwaitingSecond { patient_code, .. } => {
                 assert_eq!(patient_code, "HCM2607150275");
@@ -847,8 +1708,8 @@ mod tests {
         };
         let late = meta(id_late, "HCM2607150275", 1700, "2026-07-15 16:00:00", "hash_late");
         let early = meta(id_early, "HCM2607150275", 1694, "2026-07-15 15:00:00", "hash_early");
-        save_measurement_meta(&db, &late).unwrap();
-        save_measurement_meta(&db, &early).unwrap();
+        save_meta(&db, &late);
+        save_meta(&db, &early);
 
         assert!(matches!(
             resolve_pair_for_measurement(&db, &late).unwrap(),
@@ -877,8 +1738,8 @@ mod tests {
         };
         let m1 = meta(id1, "HCM1", 1, "2026-07-15 15:00:00", "samehash");
         let dup = meta(id_dup, "HCM1", 2, "2026-07-15 16:00:00", "samehash");
-        save_measurement_meta(&db, &m1).unwrap();
-        save_measurement_meta(&db, &dup).unwrap();
+        save_meta(&db, &m1);
+        save_meta(&db, &dup);
         resolve_pair_for_measurement(&db, &m1).unwrap();
         // content_hash_already_measured should catch before resolve in pipeline;
         // resolve also treats same hash as not a real second measurement.
@@ -900,13 +1761,15 @@ mod tests {
         let m2 = meta(b, "HCM1", 2, "2026-07-15 11:00:00", "h2");
         let m3 = meta(c, "HCM1", 3, "2026-07-15 12:00:00", "h3");
         for m in [&m1, &m2, &m3] {
-            save_measurement_meta(&db, m).unwrap();
+            save_meta(&db, m);
         }
         resolve_pair_for_measurement(&db, &m1).unwrap();
         let pair_id = match resolve_pair_for_measurement(&db, &m2).unwrap() {
             PairResolve::Ready { pair_id, .. } => pair_id,
             other => panic!("expected ready, got {other:?}"),
         };
+        // finish yêu cầu status=sending (sau claim).
+        assert!(claim_pair_for_send(&db, pair_id).unwrap());
         finish_pair_success(&db, pair_id, "{}").unwrap();
         match resolve_pair_for_measurement(&db, &m3).unwrap() {
             PairResolve::ExtraMeasurement { .. } => {}
@@ -934,8 +1797,8 @@ mod tests {
         };
         let m1 = meta(a, "HCMX", 1, "2026-07-15 10:00:00", "ch1");
         let m2 = meta(b, "HCMX", 2, "2026-07-15 11:00:00", "ch2");
-        save_measurement_meta(&db, &m1).unwrap();
-        save_measurement_meta(&db, &m2).unwrap();
+        save_meta(&db, &m1);
+        save_meta(&db, &m2);
         resolve_pair_for_measurement(&db, &m1).unwrap();
         let pair_id = match resolve_pair_for_measurement(&db, &m2).unwrap() {
             PairResolve::Ready { pair_id, .. } => pair_id,
@@ -948,6 +1811,61 @@ mod tests {
     }
 
     #[test]
+    fn recover_orphaned_sending_makes_pair_retryable() {
+        let db = db::open_memory_for_test().unwrap();
+        let (a, b) = {
+            let conn = db.conn.lock().unwrap();
+            (
+                insert_waiting(&conn, "/tmp/or1", "2026-07-15 10:00:00"),
+                insert_waiting(&conn, "/tmp/or2", "2026-07-15 11:00:00"),
+            )
+        };
+        let m1 = meta(a, "HCMOR", 1, "2026-07-15 10:00:00", "oh1");
+        let m2 = meta(b, "HCMOR", 2, "2026-07-15 11:00:00", "oh2");
+        save_meta(&db, &m1);
+        save_meta(&db, &m2);
+        resolve_pair_for_measurement(&db, &m1).unwrap();
+        let pair_id = match resolve_pair_for_measurement(&db, &m2).unwrap() {
+            PairResolve::Ready { pair_id, .. } => pair_id,
+            other => panic!("{other:?}"),
+        };
+        assert!(claim_pair_for_send(&db, pair_id).unwrap());
+        // Simulate crash: still sending, not in retryable.
+        assert!(retryable_pairs(&db).unwrap().is_empty());
+        let n = recover_orphaned_sending_pairs(&db).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(retryable_pairs(&db).unwrap(), vec![pair_id]);
+        // Có thể claim lại và finish.
+        assert!(claim_pair_for_send(&db, pair_id).unwrap());
+        save_pair_request(&db, pair_id, 7, r#"{"ok":true}"#).unwrap();
+        finish_pair_success(&db, pair_id, "{}").unwrap();
+    }
+
+    #[test]
+    fn snapshot_preferred_over_disk_mutation() {
+        let db = db::open_memory_for_test().unwrap();
+        let id = {
+            let conn = db.conn.lock().unwrap();
+            insert_waiting(&conn, "/tmp/snap", "2026-07-15 10:00:00")
+        };
+        let m = meta(id, "HCMS", 1, "2026-07-15 10:00:00", "shash");
+        save_meta(&db, &m);
+        let snap = load_snapshot(&db, id).unwrap().expect("snapshot saved");
+        assert_eq!(snap.patient_id, "HCMS");
+        assert_eq!(snap.right.sphere, 0.25);
+        assert_eq!(snap.content_hash, "shash");
+        // load_or_rehydrate dùng snapshot, không cần file disk.
+        let exp = ExpectedFileMeta {
+            content_hash: "shash".into(),
+            patient_code: "HCMS".into(),
+            patient_no: 1,
+            measured_at: "2026-07-15 10:00:00".into(),
+        };
+        let again = load_or_rehydrate_snapshot(&db, id, &exp).unwrap();
+        assert_eq!(again.right.axis, 165);
+    }
+
+    #[test]
     fn restart_keeps_awaiting_pair_state() {
         let db = db::open_memory_for_test().unwrap();
         let id = {
@@ -955,7 +1873,7 @@ mod tests {
             insert_waiting(&conn, "/tmp/restart", "2026-07-15 15:00:00")
         };
         let m = meta(id, "HCMR", 5, "2026-07-15 15:00:00", "rh1");
-        save_measurement_meta(&db, &m).unwrap();
+        save_meta(&db, &m);
         resolve_pair_for_measurement(&db, &m).unwrap();
         // Giả lập "restart": chỉ đọc lại DB.
         let status: String = {
@@ -992,13 +1910,14 @@ mod tests {
         };
         let m1 = meta(a, "HCMRETRY", 1, "2026-07-15 10:00:00", "rhA");
         let m2 = meta(b, "HCMRETRY", 2, "2026-07-15 11:00:00", "rhB");
-        save_measurement_meta(&db, &m1).unwrap();
-        save_measurement_meta(&db, &m2).unwrap();
+        save_meta(&db, &m1);
+        save_meta(&db, &m2);
         resolve_pair_for_measurement(&db, &m1).unwrap();
         let pair_id = match resolve_pair_for_measurement(&db, &m2).unwrap() {
             PairResolve::Ready { pair_id, .. } => pair_id,
             other => panic!("{other:?}"),
         };
+        assert!(claim_pair_for_send(&db, pair_id).unwrap());
         save_pair_request(&db, pair_id, 42, r#"{"kept":true}"#).unwrap();
         fail_pair(&db, pair_id, "send_error", "HIS 500").unwrap();
 
@@ -1038,7 +1957,7 @@ mod tests {
             insert_waiting(&conn, "/tmp/rs1", "2026-07-15 10:00:00")
         };
         let m1 = meta(id1, "HCMRS", 10, "2026-07-15 10:00:00", "rs1");
-        save_measurement_meta(&db, &m1).unwrap();
+        save_meta(&db, &m1);
         resolve_pair_for_measurement(&db, &m1).unwrap();
 
         // "Restart" — file 2 tới sau.
@@ -1047,7 +1966,7 @@ mod tests {
             insert_waiting(&conn, "/tmp/rs2", "2026-07-16 08:00:00")
         };
         let m2 = meta(id2, "HCMRS", 11, "2026-07-16 08:00:00", "rs2");
-        save_measurement_meta(&db, &m2).unwrap();
+        save_meta(&db, &m2);
         match resolve_pair_for_measurement(&db, &m2).unwrap() {
             PairResolve::Ready { ordered, .. } => {
                 assert_eq!(ordered.first.file_id, id1);

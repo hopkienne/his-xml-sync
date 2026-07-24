@@ -97,6 +97,8 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
           measured_at        TEXT,
           pair_id            INTEGER,
           pair_order         INTEGER,
+          -- JSON snapshot đã parse (patient + R/L eyes + hash); nguồn payload PUT.
+          measurement_snapshot TEXT,
           nb_dot_dieu_tri_id INTEGER,
           request_payload    TEXT,
           response_payload   TEXT,
@@ -134,6 +136,8 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
           response_payload   TEXT,
           error_message      TEXT,
           attempt_count      INTEGER NOT NULL DEFAULT 0,
+          -- Thời điểm claim sending (audit / orphan recovery).
+          sending_started_at TEXT,
           processed_at       TEXT,
           created_at         TEXT    NOT NULL,
           updated_at         TEXT    NOT NULL
@@ -168,6 +172,8 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     migrate_xml_files_processing_schema(conn)?;
     migrate_xml_files_pairing_schema(conn)?;
     migrate_measurement_pairs_table(conn)?;
+    migrate_xml_files_measurement_snapshot(conn)?;
+    migrate_measurement_pairs_sending_started_at(conn)?;
 
     Ok(())
 }
@@ -509,6 +515,7 @@ fn migrate_measurement_pairs_table(conn: &Connection) -> Result<(), String> {
           response_payload   TEXT,
           error_message      TEXT,
           attempt_count      INTEGER NOT NULL DEFAULT 0,
+          sending_started_at TEXT,
           processed_at       TEXT,
           created_at         TEXT    NOT NULL,
           updated_at         TEXT    NOT NULL
@@ -518,6 +525,26 @@ fn migrate_measurement_pairs_table(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|error| format!("Tạo measurement_pairs thất bại: {error}"))
+}
+
+/// Snapshot parse (eyes + meta) — không rebuild payload từ file mutable.
+fn migrate_xml_files_measurement_snapshot(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "xml_files")?;
+    if columns.iter().any(|column| column == "measurement_snapshot") {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE xml_files ADD COLUMN measurement_snapshot TEXT;")
+        .map_err(|error| format!("Thêm measurement_snapshot thất bại: {error}"))
+}
+
+/// Mốc claim sending để audit / orphan recovery sau crash.
+fn migrate_measurement_pairs_sending_started_at(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "measurement_pairs")?;
+    if columns.iter().any(|column| column == "sending_started_at") {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE measurement_pairs ADD COLUMN sending_started_at TEXT;")
+        .map_err(|error| format!("Thêm sending_started_at thất bại: {error}"))
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
@@ -754,12 +781,19 @@ mod tests {
             "measured_at",
             "pair_id",
             "pair_order",
+            "measurement_snapshot",
         ] {
             assert!(
                 columns.iter().any(|column| column == expected),
                 "missing column {expected}"
             );
         }
+
+        let pair_cols = table_columns(&conn, "measurement_pairs").expect("pair columns");
+        assert!(
+            pair_cols.iter().any(|c| c == "sending_started_at"),
+            "missing sending_started_at"
+        );
 
         let row = conn
             .query_row(

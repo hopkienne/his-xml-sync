@@ -203,6 +203,22 @@ async fn process_inner(
     };
     state.hash_locks.lock().await.clear();
     state.patient_locks.lock().await.clear();
+
+    // Dưới run_lock: mọi pair `sending` còn sót là orphan (crash giữa chừng) → send_error.
+    match measurement_pair::recover_orphaned_sending_pairs(db) {
+        Ok(n) if n > 0 => {
+            app_logger::warn(
+                "kr800",
+                &format!("recover_orphaned_sending: {n} pair(s) sending → send_error"),
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            app_logger::error("kr800", &format!("recover_orphaned_sending failed: {error}"));
+            return Err(error);
+        }
+    }
+
     let settings = settings::load(db)?;
     if settings.his_api_url.trim().is_empty() {
         return Err("Chưa cấu hình API URL HIS. Vào Cấu hình để lưu trước.".into());
@@ -285,14 +301,28 @@ async fn process_one_file(
     catalog: &Catalog,
     file: WorkFile,
 ) -> FileOutcome {
-    if !claim_file(db, file.id).unwrap_or(false) {
-        return FileOutcome::default();
+    match claim_file(db, file.id) {
+        Ok(true) => {}
+        Ok(false) => return FileOutcome::default(),
+        Err(error) => {
+            app_logger::error(
+                "kr800",
+                &format!("file_id={} claim_file failed: {error}", file.id),
+            );
+            return FileOutcome::default();
+        }
     }
     emit_file_progress(app, db, file.id);
     match process_claimed_file(app, db, state, client, settings, patients, catalog, &file).await {
         Ok(outcome) => outcome,
         Err((status, message)) => {
-            let _ = fail_file(db, file.id, status, &message);
+            // Lỗi trước khi pair claim — chỉ file hiện tại (chưa thuộc pair gửi).
+            if let Err(e) = fail_file(db, file.id, status, &message) {
+                app_logger::error(
+                    "kr800",
+                    &format!("file_id={} fail_file after error failed: {e}", file.id),
+                );
+            }
             emit_file_progress(app, db, file.id);
             app_logger::error(
                 "kr800",
@@ -341,7 +371,8 @@ async fn process_claimed_file(
 
     let parsed = xml_parser::parse_measurement(&bytes).map_err(|error| ("xml_error", error))?;
     let meta = measurement_pair::meta_from_parsed(file.id, &parsed, &hash);
-    measurement_pair::save_measurement_meta(db, &meta).map_err(|error| ("xml_error", error))?;
+    measurement_pair::save_measurement_meta(db, &meta, &parsed)
+        .map_err(|error| ("xml_error", error))?;
     set_stage(db, file.id, "parsed").map_err(|error| ("xml_error", error))?;
     emit_file_progress(app, db, file.id);
 
@@ -424,10 +455,22 @@ async fn process_retry_pair(
     catalog: &Catalog,
     pair_id: i64,
 ) -> FileOutcome {
-    let Some(pair) = measurement_pair::load_pair_by_id(db, pair_id).unwrap_or(None) else {
-        return FileOutcome::default();
+    let pair = match measurement_pair::load_pair_by_id(db, pair_id) {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            app_logger::error("kr800", &format!("retry pair_id={pair_id}: không tồn tại"));
+            return FileOutcome::default();
+        }
+        Err(error) => {
+            app_logger::error("kr800", &format!("retry load pair_id={pair_id}: {error}"));
+            return FileOutcome::default();
+        }
     };
     let (Some(id1), Some(id2)) = (pair.file_id_1, pair.file_id_2) else {
+        app_logger::error(
+            "kr800",
+            &format!("retry pair_id={pair_id}: thiếu file_id_1/2"),
+        );
         return FileOutcome::default();
     };
 
@@ -441,55 +484,47 @@ async fn process_retry_pair(
     };
     let _patient_guard = patient_lock.lock().await;
 
-    if !measurement_pair::claim_pair_for_send(db, pair_id).unwrap_or(false) {
-        return FileOutcome::default();
+    match measurement_pair::claim_pair_for_send(db, pair_id) {
+        Ok(true) => {}
+        Ok(false) => return FileOutcome::default(),
+        Err(error) => {
+            app_logger::error(
+                "kr800",
+                &format!("pair_id={pair_id} claim_pair_for_send: {error}"),
+            );
+            // Cố gắng đưa pair ra khỏi trạng thái không nhất quán.
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+                app_logger::error("kr800", &format!("pair_id={pair_id} fail after claim err: {e}"));
+            }
+            return FileOutcome::default();
+        }
     }
     emit_pair_progress(app, db, pair_id);
 
-    // Ưu tiên payload đã lưu (retry không chọn lại file khác).
-    let payload_json = if let Some(existing) = pair.request_payload.clone() {
-        existing
-    } else {
-        match rebuild_payload_from_files(db, catalog, id1, id2) {
-            Ok(json) => json,
-            Err(error) => {
-                let _ = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error);
-                emit_pair_progress(app, db, pair_id);
-                return FileOutcome::default();
+    // Ưu tiên payload đã lưu (cùng pair, không chọn file khác).
+    let (payload, payload_json) = match resolve_payload_for_pair(db, catalog, &pair, id1, id2) {
+        Ok(v) => v,
+        Err(error) => {
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error) {
+                app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
             }
-        }
-    };
-
-    let treatment_id = match match_treatment(patients, &pair.patient_code) {
-        Ok(id) => id,
-        Err((status, message)) => {
-            let _ = measurement_pair::fail_pair(db, pair_id, status, &message);
             emit_pair_progress(app, db, pair_id);
             return FileOutcome::default();
         }
     };
 
-    let payload: HisPayload = match serde_json::from_str(&payload_json) {
-        Ok(p) => p,
-        Err(_) => {
-            // payload cũ schema khác — rebuild.
-            match rebuild_payload_from_files(db, catalog, id1, id2) {
-                Ok(json) => match serde_json::from_str(&json) {
-                    Ok(p) => p,
-                    Err(error) => {
-                        let _ = measurement_pair::fail_pair(
-                            db,
-                            pair_id,
-                            "mapping_error",
-                            &format!("Payload không hợp lệ: {error}"),
-                        );
-                        return FileOutcome::default();
-                    }
-                },
-                Err(error) => {
-                    let _ = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error);
-                    return FileOutcome::default();
+    // Giữ treatment đã lưu nếu có; không đổi file/order.
+    let treatment_id = if let Some(tid) = pair.nb_dot_dieu_tri_id {
+        tid
+    } else {
+        match match_treatment(patients, &pair.patient_code) {
+            Ok(id) => id,
+            Err((status, message)) => {
+                if let Err(e) = measurement_pair::fail_pair(db, pair_id, status, &message) {
+                    app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
                 }
+                emit_pair_progress(app, db, pair_id);
+                return FileOutcome::default();
             }
         }
     };
@@ -497,30 +532,54 @@ async fn process_retry_pair(
     if let Err(error) =
         measurement_pair::save_pair_request(db, pair_id, treatment_id, &payload_json)
     {
-        let _ = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error);
+        if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+            app_logger::error("kr800", &format!("pair_id={pair_id} fail after save_request: {e}"));
+        }
+        emit_pair_progress(app, db, pair_id);
         return FileOutcome::default();
     }
 
     match send_update(db, state, client, settings, treatment_id, &payload, &payload_json, pair_id)
         .await
     {
-        Ok(response) => {
-            let _ = measurement_pair::finish_pair_success(db, pair_id, &response);
-            emit_pair_progress(app, db, pair_id);
-            app_logger::info(
-                "kr800",
-                &format!(
-                    "pair_id={pair_id} patient={} treatment_id={treatment_id} retry processed",
-                    pair.patient_code
-                ),
-            );
-            FileOutcome {
-                processed: true,
-                ..FileOutcome::default()
+        Ok(response) => match measurement_pair::finish_pair_success(db, pair_id, &response) {
+            Ok(()) => {
+                emit_pair_progress(app, db, pair_id);
+                app_logger::info(
+                    "kr800",
+                    &format!(
+                        "pair_id={pair_id} patient={} treatment_id={treatment_id} retry processed",
+                        pair.patient_code
+                    ),
+                );
+                FileOutcome {
+                    processed: true,
+                    ..FileOutcome::default()
+                }
             }
-        }
+            Err(error) => {
+                // HTTP OK nhưng DB chưa processed — không báo processed:true; đưa về retryable.
+                app_logger::error(
+                    "kr800",
+                    &format!(
+                        "pair_id={pair_id} HIS OK but finish_pair_success failed: {error}"
+                    ),
+                );
+                let msg = format!("HIS đã nhận nhưng ghi DB processed thất bại: {error}");
+                if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &msg) {
+                    app_logger::error(
+                        "kr800",
+                        &format!("pair_id={pair_id} fail after finish error: {e}"),
+                    );
+                }
+                emit_pair_progress(app, db, pair_id);
+                FileOutcome::default()
+            }
+        },
         Err(error) => {
-            let _ = measurement_pair::fail_pair(db, pair_id, "send_error", &error);
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+                app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair send: {e}"));
+            }
             emit_pair_progress(app, db, pair_id);
             app_logger::error("kr800", &format!("pair_id={pair_id} send_error: {error}"));
             FileOutcome::default()
@@ -539,29 +598,52 @@ async fn send_ready_pair(
     pair_id: i64,
     ordered: &OrderedPair,
 ) -> Result<FileOutcome, (&'static str, String)> {
-    if !measurement_pair::claim_pair_for_send(db, pair_id).map_err(|e| ("send_error", e))? {
-        // Task khác đã claim — không lỗi.
-        return Ok(FileOutcome::default());
+    // Mọi lỗi sau claim phải fail_pair (cả pair + 2 XML), không return Err để fail_file 1 XML.
+    match measurement_pair::claim_pair_for_send(db, pair_id) {
+        Ok(true) => {}
+        Ok(false) => return Ok(FileOutcome::default()),
+        Err(error) => {
+            app_logger::error(
+                "kr800",
+                &format!("pair_id={pair_id} claim_pair_for_send: {error}"),
+            );
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+                app_logger::error("kr800", &format!("pair_id={pair_id} fail after claim: {e}"));
+            }
+            emit_pair_progress(app, db, pair_id);
+            return Ok(FileOutcome::default());
+        }
     }
     emit_pair_progress(app, db, pair_id);
 
-    let first_eyes = load_parsed_eyes_from_disk(db, ordered.first.file_id)
-        .await
-        .map_err(|e| ("xml_error", e))?;
-    let second_eyes = load_parsed_eyes_from_disk(db, ordered.second.file_id)
-        .await
-        .map_err(|e| ("xml_error", e))?;
+    let eyes = match load_ordered_eyes_from_snapshots(db, ordered) {
+        Ok(e) => e,
+        Err(error) => {
+            app_logger::error(
+                "kr800",
+                &format!("pair_id={pair_id} snapshot/load failed: {error}"),
+            );
+            // mapping_error: pair CHECK không có xml_error; integrity snapshot = lỗi mapping/gửi.
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error) {
+                app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
+            }
+            emit_pair_progress(app, db, pair_id);
+            return Ok(FileOutcome::default());
+        }
+    };
 
     let payload = match build_his_payload(
         catalog,
-        &first_eyes.0,
-        &first_eyes.1,
-        &second_eyes.0,
-        &second_eyes.1,
+        &eyes.0,
+        &eyes.1,
+        &eyes.2,
+        &eyes.3,
     ) {
         Ok(p) => p,
         Err(error) => {
-            let _ = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error);
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error) {
+                app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
+            }
             emit_pair_progress(app, db, pair_id);
             return Ok(FileOutcome::default());
         }
@@ -570,7 +652,9 @@ async fn send_ready_pair(
         Ok(j) => j,
         Err(error) => {
             let msg = format!("Serialize request thất bại: {error}");
-            let _ = measurement_pair::fail_pair(db, pair_id, "mapping_error", &msg);
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &msg) {
+                app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
+            }
             emit_pair_progress(app, db, pair_id);
             return Ok(FileOutcome::default());
         }
@@ -579,13 +663,19 @@ async fn send_ready_pair(
     let treatment_id = match match_treatment(patients, &ordered.first.patient_code) {
         Ok(id) => id,
         Err((status, message)) => {
-            let _ = measurement_pair::fail_pair(db, pair_id, status, &message);
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, status, &message) {
+                app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
+            }
             emit_pair_progress(app, db, pair_id);
             return Ok(FileOutcome::default());
         }
     };
-    if let Err(e) = measurement_pair::save_pair_request(db, pair_id, treatment_id, &payload_json) {
-        let _ = measurement_pair::fail_pair(db, pair_id, "mapping_error", &e);
+    if let Err(error) =
+        measurement_pair::save_pair_request(db, pair_id, treatment_id, &payload_json)
+    {
+        if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+            app_logger::error("kr800", &format!("pair_id={pair_id} fail after save: {e}"));
+        }
         emit_pair_progress(app, db, pair_id);
         return Ok(FileOutcome::default());
     }
@@ -615,25 +705,45 @@ async fn send_ready_pair(
     )
     .await
     {
-        Ok(response) => {
-            measurement_pair::finish_pair_success(db, pair_id, &response)
-                .map_err(|e| ("send_error", e))?;
-            emit_pair_progress(app, db, pair_id);
-            app_logger::info(
-                "kr800",
-                &format!(
-                    "pair_id={pair_id} files=({},{}) patient={} processed",
-                    ordered.first.file_id, ordered.second.file_id, ordered.first.patient_code
-                ),
-            );
-            Ok(FileOutcome {
-                processed: true,
-                ..FileOutcome::default()
-            })
-        }
+        Ok(response) => match measurement_pair::finish_pair_success(db, pair_id, &response) {
+            Ok(()) => {
+                emit_pair_progress(app, db, pair_id);
+                app_logger::info(
+                    "kr800",
+                    &format!(
+                        "pair_id={pair_id} files=({},{}) patient={} processed",
+                        ordered.first.file_id,
+                        ordered.second.file_id,
+                        ordered.first.patient_code
+                    ),
+                );
+                Ok(FileOutcome {
+                    processed: true,
+                    ..FileOutcome::default()
+                })
+            }
+            Err(error) => {
+                app_logger::error(
+                    "kr800",
+                    &format!(
+                        "pair_id={pair_id} HIS OK but finish_pair_success failed: {error}"
+                    ),
+                );
+                let msg = format!("HIS đã nhận nhưng ghi DB processed thất bại: {error}");
+                if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &msg) {
+                    app_logger::error(
+                        "kr800",
+                        &format!("pair_id={pair_id} fail after finish error: {e}"),
+                    );
+                }
+                emit_pair_progress(app, db, pair_id);
+                Ok(FileOutcome::default())
+            }
+        },
         Err(error) => {
-            // Giữ quan hệ cặp + status send_error trên cả pair và hai file (không fail_file đơn lẻ).
-            let _ = measurement_pair::fail_pair(db, pair_id, "send_error", &error);
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+                app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
+            }
             emit_pair_progress(app, db, pair_id);
             app_logger::error("kr800", &format!("pair_id={pair_id} send_error: {error}"));
             Ok(FileOutcome::default())
@@ -641,57 +751,68 @@ async fn send_ready_pair(
     }
 }
 
-async fn load_parsed_eyes_from_disk(
+/// (R1, L1, R2, L2) từ snapshot DB — không đọc file mutable để PUT.
+fn load_ordered_eyes_from_snapshots(
     db: &AppDb,
-    file_id: i64,
-) -> Result<(ParsedEye, ParsedEye), String> {
-    let path: String = {
-        let conn = db
-            .conn
-            .lock()
-            .map_err(|_| "Không khóa được SQLite.".to_string())?;
-        conn.query_row(
-            "SELECT file_path FROM xml_files WHERE id = ?1",
-            params![file_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("Đọc path file id={file_id}: {e}"))?
+    ordered: &OrderedPair,
+) -> Result<(ParsedEye, ParsedEye, ParsedEye, ParsedEye), String> {
+    let exp1 = measurement_pair::ExpectedFileMeta {
+        content_hash: ordered.first.content_hash.clone(),
+        patient_code: ordered.first.patient_code.clone(),
+        patient_no: ordered.first.patient_no,
+        measured_at: ordered.first.measured_at.clone(),
     };
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|e| format!("Không đọc XML id={file_id}: {e}"))?;
-    let parsed = xml_parser::parse_measurement(&bytes)?;
-    Ok((parsed.right, parsed.left))
+    let exp2 = measurement_pair::ExpectedFileMeta {
+        content_hash: ordered.second.content_hash.clone(),
+        patient_code: ordered.second.patient_code.clone(),
+        patient_no: ordered.second.patient_no,
+        measured_at: ordered.second.measured_at.clone(),
+    };
+    let s1 = measurement_pair::load_or_rehydrate_snapshot(db, ordered.first.file_id, &exp1)?;
+    let s2 = measurement_pair::load_or_rehydrate_snapshot(db, ordered.second.file_id, &exp2)?;
+    Ok((
+        s1.right_eye(),
+        s1.left_eye(),
+        s2.right_eye(),
+        s2.left_eye(),
+    ))
 }
 
-fn rebuild_payload_from_files(
+/// Resolve payload retry: ưu tiên request_payload đã lưu; rebuild chỉ từ snapshot hợp lệ.
+fn resolve_payload_for_pair(
     db: &AppDb,
     catalog: &Catalog,
-    file_id_1: i64,
-    file_id_2: i64,
-) -> Result<String, String> {
-    let path1 = file_path(db, file_id_1)?;
-    let path2 = file_path(db, file_id_2)?;
-    let bytes1 = std::fs::read(&path1).map_err(|e| format!("Đọc file1: {e}"))?;
-    let bytes2 = std::fs::read(&path2).map_err(|e| format!("Đọc file2: {e}"))?;
-    let p1 = xml_parser::parse_measurement(&bytes1)?;
-    let p2 = xml_parser::parse_measurement(&bytes2)?;
-    // Đảm bảo order theo metadata (file_id_1/2 trên pair đã ordered).
-    let payload = build_his_payload(catalog, &p1.right, &p1.left, &p2.right, &p2.left)?;
-    serde_json::to_string(&payload).map_err(|e| format!("Serialize: {e}"))
-}
+    pair: &measurement_pair::PairRecord,
+    id1: i64,
+    id2: i64,
+) -> Result<(HisPayload, String), String> {
+    if let Some(existing) = pair.request_payload.as_ref() {
+        if let Ok(payload) = serde_json::from_str::<HisPayload>(existing) {
+            return Ok((payload, existing.clone()));
+        }
+        // JSON cũ hỏng / schema khác — rebuild từ snapshot, lưu JSON mới (không giữ chuỗi hỏng).
+        app_logger::warn(
+            "kr800",
+            &format!(
+                "pair_id={} request_payload không deserialize được — rebuild từ snapshot",
+                pair.id
+            ),
+        );
+    }
 
-fn file_path(db: &AppDb, file_id: i64) -> Result<String, String> {
-    let conn = db
-        .conn
-        .lock()
-        .map_err(|_| "Không khóa được SQLite.".to_string())?;
-    conn.query_row(
-        "SELECT file_path FROM xml_files WHERE id = ?1",
-        params![file_id],
-        |row| row.get(0),
-    )
-    .map_err(|e| format!("Đọc path id={file_id}: {e}"))
+    let exp1 = measurement_pair::expected_meta_for_order(pair, 1)?;
+    let exp2 = measurement_pair::expected_meta_for_order(pair, 2)?;
+    let s1 = measurement_pair::load_or_rehydrate_snapshot(db, id1, &exp1)?;
+    let s2 = measurement_pair::load_or_rehydrate_snapshot(db, id2, &exp2)?;
+    let payload = build_his_payload(
+        catalog,
+        &s1.right_eye(),
+        &s1.left_eye(),
+        &s2.right_eye(),
+        &s2.left_eye(),
+    )?;
+    let json = serde_json::to_string(&payload).map_err(|e| format!("Serialize payload: {e}"))?;
+    Ok((payload, json))
 }
 
 fn build_his_payload(
