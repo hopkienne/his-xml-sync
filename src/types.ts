@@ -82,7 +82,11 @@ export type TrackedXmlStatus =
   | "xml_error"
   | "mapping_error"
   | "send_error"
-  | "failed";
+  | "failed"
+  | "awaiting_pair"
+  | "pairing"
+  | "pairing_error"
+  | "extra_measurement";
 
 export type TrackedXmlFile = {
   id: number;

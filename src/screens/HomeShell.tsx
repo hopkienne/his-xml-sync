@@ -229,7 +229,18 @@ export function HomeShell({ session, onLogout }: HomeShellProps) {
           setFolderStatus(payload.message);
         }
         if (payload.total > 0) {
-          setProcessPhase(payload.failed > 0 && payload.processed === 0 ? "error" : "success");
+          // awaiting_pair (chờ lần đo 2) không coi là lỗi pipeline.
+          const onlyAwaiting =
+            payload.failed === 0 &&
+            payload.processed === 0 &&
+            /chờ lần đo 2/i.test(payload.message);
+          setProcessPhase(
+            onlyAwaiting
+              ? "success"
+              : payload.failed > 0 && payload.processed === 0
+                ? "error"
+                : "success",
+          );
         }
         void quietRefreshFiles();
         void getAuthStatus().then((status) => {
@@ -488,7 +499,7 @@ export function HomeShell({ session, onLogout }: HomeShellProps) {
 
     setProcessPhase("running");
     setHisAuthError(null);
-    setFolderStatus("Đang tải danh sách người bệnh và xử lý tối đa 5 file cùng lúc…");
+    setFolderStatus("Đang tải danh sách người bệnh và ghép cặp / gửi HIS…");
     setFolderError(null);
     void logClientEvent("info", "kr800", "process pipeline started");
 
@@ -500,10 +511,13 @@ export function HomeShell({ session, onLogout }: HomeShellProps) {
       setXmlFiles(result.files);
       setHisAuthError(null);
       setProcessPhase("success");
+      const awaiting = result.awaitingPair ?? 0;
       setFolderStatus(
         result.total === 0
           ? "Không có file ở trạng thái Chờ xử lý trong khoảng thời gian đã chọn."
-          : `Đã xử lý ${result.processed}/${result.total} file; bỏ qua trùng ${result.skipped}; lỗi ${result.failed}.`,
+          : awaiting > 0 && result.processed === 0 && result.failed === 0
+            ? `Đã nhận ${awaiting} lần đo 1, đang chờ lần đo 2.`
+            : `Đã xử lý ${result.processed}/${result.total}; chờ lần đo 2: ${awaiting}; bỏ qua ${result.skipped}; lỗi ${result.failed}.`,
       );
       const status = await getAuthStatus();
       setHisAuth(status);

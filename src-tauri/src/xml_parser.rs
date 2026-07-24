@@ -1,3 +1,4 @@
+use chrono::NaiveDateTime;
 use encoding_rs::SHIFT_JIS;
 use roxmltree::{Document, Node};
 use serde::{Deserialize, Serialize};
@@ -29,12 +30,17 @@ pub struct ParsedEye {
     pub axis: i64,
 }
 
+/// Kết quả đo REF đầy đủ từ một file KR-800 (cả hai mắt).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedMeasurement {
     pub patient_id: String,
-    pub measured_at: Option<String>,
+    /// `nsCommon:Patient/nsCommon:No.` — dùng ghép thứ tự lần đo.
+    pub patient_no: i64,
+    /// Date + Time trong XML; nguồn chính để so sánh trước/sau.
+    pub measured_at: NaiveDateTime,
     pub right: ParsedEye,
     pub left: ParsedEye,
+    pub machine_no: Option<String>,
 }
 
 pub fn preview_file(path: &str) -> Result<XmlPreview, String> {
@@ -48,7 +54,7 @@ pub fn preview_file(path: &str) -> Result<XmlPreview, String> {
     Ok(XmlPreview {
         file_name,
         patient_id: Some(parsed.patient_id),
-        measured_at: parsed.measured_at,
+        measured_at: Some(format_measured_at(parsed.measured_at)),
         right: eye_preview(&parsed.right),
         left: eye_preview(&parsed.left),
     })
@@ -67,13 +73,27 @@ pub fn parse_measurement(bytes: &[u8]) -> Result<ParsedMeasurement, String> {
         .ok_or_else(|| "Không tìm thấy Common.Patient trong XML.".to_string())?;
     let patient_id = child_text(patient, "ID")
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Không tìm thấy Common.Patient.ID trong XML.".to_string())?;
+        .ok_or_else(|| "Thiếu hoặc rỗng Common.Patient.ID trong XML.".to_string())?;
 
-    let measured_at = {
-        let date = child_text(common, "Date");
-        let time = child_text(common, "Time");
-        date.zip(time).map(|(date, time)| format!("{date} {time}"))
-    };
+    let patient_no_raw = child_text(patient, "No.")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Thiếu Common.Patient.No. trong XML.".to_string())?;
+    let patient_no = patient_no_raw.parse::<i64>().map_err(|_| {
+        format!("Common.Patient.No. không phải số nguyên hợp lệ: {patient_no_raw}")
+    })?;
+
+    let date = child_text(common, "Date")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Thiếu Common.Date trong XML.".to_string())?;
+    let time = child_text(common, "Time")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Thiếu Common.Time trong XML.".to_string())?;
+    let measured_at = parse_measured_at(&date, &time)?;
+
+    let machine_no = document
+        .descendants()
+        .find(|node| is_element(*node, "Company"))
+        .and_then(|company| child_text(company, "No."));
 
     let ref_measure = document
         .descendants()
@@ -86,10 +106,40 @@ pub fn parse_measurement(bytes: &[u8]) -> Result<ParsedMeasurement, String> {
 
     Ok(ParsedMeasurement {
         patient_id,
+        patient_no,
         measured_at,
         right: parse_eye(ref_node, "R")?,
         left: parse_eye(ref_node, "L")?,
+        machine_no,
     })
+}
+
+/// Chuẩn hoá Date+Time XML → `YYYY-MM-DD HH:mm:ss` so sánh được.
+pub fn format_measured_at(value: NaiveDateTime) -> String {
+    value.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn parse_measured_at(date: &str, time: &str) -> Result<NaiveDateTime, String> {
+    let date = date.trim();
+    let time = time.trim();
+    let candidates = [
+        format!("{date} {time}"),
+        format!("{date}T{time}"),
+    ];
+    for raw in candidates {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(&raw, "%Y-%m-%d %H:%M:%S") {
+            return Ok(dt);
+        }
+        if let Ok(dt) = NaiveDateTime::parse_from_str(&raw, "%Y-%m-%d %H:%M") {
+            return Ok(dt);
+        }
+        if let Ok(dt) = NaiveDateTime::parse_from_str(&raw, "%Y/%m/%d %H:%M:%S") {
+            return Ok(dt);
+        }
+    }
+    Err(format!(
+        "Common.Date/Time sai định dạng (nhận Date={date:?}, Time={time:?})."
+    ))
 }
 
 fn parse_eye(ref_node: Node<'_, '_>, side: &str) -> Result<ParsedEye, String> {
@@ -161,11 +211,59 @@ fn eye_preview(eye: &ParsedEye) -> EyeRefraction {
 mod tests {
     use super::*;
 
+    /// Fixture khớp nghiệp vụ KR-800 (Patient.ID / No. / R+L Median).
+    fn sample_xml_measurement1() -> &'static [u8] {
+        br#"<?xml version="1.0"?><Ophthalmology xmlns:nsCommon="urn:c" xmlns:r="urn:r"><nsCommon:Common><nsCommon:Date>2026-07-15</nsCommon:Date><nsCommon:Time>15:12:40</nsCommon:Time><nsCommon:Patient><nsCommon:ID>HCM2607150275</nsCommon:ID><nsCommon:No.>1694</nsCommon:No.></nsCommon:Patient></nsCommon:Common><nsCommon:Company><nsCommon:No.>4780634</nsCommon:No.></nsCommon:Company><r:Measure type="REF"><r:REF><r:R><r:Median><r:Sphere>+0.25</r:Sphere><r:Cylinder>-1.00</r:Cylinder><r:Axis>165.0</r:Axis></r:Median></r:R><r:L><r:Median><r:Sphere>+1.25</r:Sphere><r:Cylinder>-1.75</r:Cylinder><r:Axis>176</r:Axis></r:Median></r:L></r:REF></r:Measure></Ophthalmology>"#
+    }
+
     #[test]
-    fn parses_patient_and_ref_medians() {
-        let xml = br#"<?xml version="1.0"?><Ophthalmology xmlns:c="urn:c" xmlns:r="urn:r"><c:Common><c:Date>2026-07-07</c:Date><c:Time>14:50:00</c:Time><c:Patient><c:ID>HCM2607070269</c:ID></c:Patient></c:Common><r:Measure type="REF"><r:REF><r:R><r:Median><r:Sphere>+1.750</r:Sphere><r:Cylinder>-1.00</r:Cylinder><r:Axis>178.0</r:Axis></r:Median></r:R><r:L><r:Median><r:Sphere>0.75</r:Sphere><r:Cylinder>-0.25</r:Cylinder><r:Axis>35</r:Axis></r:Median></r:L></r:REF></r:Measure></Ophthalmology>"#;
+    fn parses_patient_id_no_measured_at_and_ref_medians() {
+        let parsed = parse_measurement(sample_xml_measurement1()).expect("parse fixture");
+        assert_eq!(parsed.patient_id, "HCM2607150275");
+        assert_eq!(parsed.patient_no, 1694);
+        assert_eq!(
+            format_measured_at(parsed.measured_at),
+            "2026-07-15 15:12:40"
+        );
+        assert_eq!(parsed.machine_no.as_deref(), Some("4780634"));
+        assert_eq!(
+            parsed.right,
+            ParsedEye {
+                sphere: 0.25,
+                cylinder: -1.0,
+                axis: 165
+            }
+        );
+        assert_eq!(
+            parsed.left,
+            ParsedEye {
+                sphere: 1.25,
+                cylinder: -1.75,
+                axis: 176
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_missing_patient_no() {
+        let xml = br#"<?xml version="1.0"?><Ophthalmology xmlns:c="urn:c" xmlns:r="urn:r"><c:Common><c:Date>2026-07-15</c:Date><c:Time>15:12:40</c:Time><c:Patient><c:ID>HCM2607150275</c:ID></c:Patient></c:Common><r:Measure type="REF"><r:REF><r:R><r:Median><r:Sphere>0.25</r:Sphere><r:Cylinder>-1.00</r:Cylinder><r:Axis>165</r:Axis></r:Median></r:R><r:L><r:Median><r:Sphere>1.25</r:Sphere><r:Cylinder>-1.75</r:Cylinder><r:Axis>176</r:Axis></r:Median></r:L></r:REF></r:Measure></Ophthalmology>"#;
+        let err = parse_measurement(xml).unwrap_err();
+        assert!(err.contains("No."), "{err}");
+    }
+
+    #[test]
+    fn rejects_missing_date() {
+        let xml = br#"<?xml version="1.0"?><Ophthalmology xmlns:c="urn:c" xmlns:r="urn:r"><c:Common><c:Time>15:12:40</c:Time><c:Patient><c:ID>X</c:ID><c:No.>1</c:No.></c:Patient></c:Common><r:Measure type="REF"><r:REF><r:R><r:Median><r:Sphere>0</r:Sphere><r:Cylinder>0</r:Cylinder><r:Axis>0</r:Axis></r:Median></r:R><r:L><r:Median><r:Sphere>0</r:Sphere><r:Cylinder>0</r:Cylinder><r:Axis>0</r:Axis></r:Median></r:L></r:REF></r:Measure></Ophthalmology>"#;
+        let err = parse_measurement(xml).unwrap_err();
+        assert!(err.contains("Date"), "{err}");
+    }
+
+    #[test]
+    fn parses_patient_and_ref_medians_legacy_shape() {
+        let xml = br#"<?xml version="1.0"?><Ophthalmology xmlns:c="urn:c" xmlns:r="urn:r"><c:Common><c:Date>2026-07-07</c:Date><c:Time>14:50:00</c:Time><c:Patient><c:ID>HCM2607070269</c:ID><c:No.>100</c:No.></c:Patient></c:Common><r:Measure type="REF"><r:REF><r:R><r:Median><r:Sphere>+1.750</r:Sphere><r:Cylinder>-1.00</r:Cylinder><r:Axis>178.0</r:Axis></r:Median></r:R><r:L><r:Median><r:Sphere>0.75</r:Sphere><r:Cylinder>-0.25</r:Cylinder><r:Axis>35</r:Axis></r:Median></r:L></r:REF></r:Measure></Ophthalmology>"#;
         let parsed = parse_measurement(xml).expect("parse fixture");
         assert_eq!(parsed.patient_id, "HCM2607070269");
+        assert_eq!(parsed.patient_no, 100);
         assert_eq!(
             parsed.right,
             ParsedEye {

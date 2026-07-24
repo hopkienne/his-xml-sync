@@ -30,7 +30,19 @@ pub fn init(app: &AppHandle) -> Result<AppDb, String> {
     })
 }
 
-fn migrate(conn: &Connection) -> Result<(), String> {
+/// Mở DB in-memory đã migrate — dùng cho unit/integration tests.
+#[cfg(test)]
+pub fn open_memory_for_test() -> Result<AppDb, String> {
+    let conn = Connection::open_in_memory()
+        .map_err(|error| format!("Không mở được SQLite in-memory: {error}"))?;
+    migrate(&conn)?;
+    Ok(AppDb {
+        conn: Mutex::new(conn),
+        path: PathBuf::from(":memory:"),
+    })
+}
+
+pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         r#"
         PRAGMA foreign_keys = ON;
@@ -75,11 +87,16 @@ fn migrate(conn: &Connection) -> Result<(), String> {
                                CHECK (status IN (
                                  'waiting', 'processing', 'parsed', 'patient_matched', 'mapped',
                                  'sending', 'processed', 'patient_not_found', 'treatment_ambiguous',
-                                 'xml_error', 'mapping_error', 'send_error', 'failed'
+                                 'xml_error', 'mapping_error', 'send_error', 'failed',
+                                 'awaiting_pair', 'pairing', 'pairing_error', 'extra_measurement'
                                )),
           error_message      TEXT,
           content_hash       TEXT,
-          patient_code      TEXT,
+          patient_code       TEXT,
+          patient_no         INTEGER,
+          measured_at        TEXT,
+          pair_id            INTEGER,
+          pair_order         INTEGER,
           nb_dot_dieu_tri_id INTEGER,
           request_payload    TEXT,
           response_payload   TEXT,
@@ -91,6 +108,39 @@ fn migrate(conn: &Connection) -> Result<(), String> {
 
         CREATE INDEX IF NOT EXISTS idx_xml_files_device_status
           ON xml_files (device_key, status);
+
+        -- Cặp hai lần đo KR-800 (một PUT HIS / cặp).
+        CREATE TABLE IF NOT EXISTS measurement_pairs (
+          id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+          device_key         TEXT    NOT NULL DEFAULT 'kr-800',
+          patient_code       TEXT    NOT NULL,
+          patient_code_norm  TEXT    NOT NULL,
+          file_id_1          INTEGER,
+          file_id_2          INTEGER,
+          content_hash_1     TEXT,
+          content_hash_2     TEXT,
+          patient_no_1       INTEGER,
+          patient_no_2       INTEGER,
+          measured_at_1      TEXT,
+          measured_at_2      TEXT,
+          status             TEXT    NOT NULL DEFAULT 'awaiting_pair'
+                               CHECK (status IN (
+                                 'awaiting_pair', 'pairing', 'sending', 'processed',
+                                 'pairing_error', 'send_error', 'patient_not_found',
+                                 'treatment_ambiguous', 'mapping_error'
+                               )),
+          nb_dot_dieu_tri_id INTEGER,
+          request_payload    TEXT,
+          response_payload   TEXT,
+          error_message      TEXT,
+          attempt_count      INTEGER NOT NULL DEFAULT 0,
+          processed_at       TEXT,
+          created_at         TEXT    NOT NULL,
+          updated_at         TEXT    NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_measurement_pairs_patient
+          ON measurement_pairs (device_key, patient_code_norm, status);
 
         -- Session đăng nhập HIS (singleton): lưu access_token cho các API sau
         CREATE TABLE IF NOT EXISTS auth_session (
@@ -116,6 +166,8 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     migrate_device_config_add_patient_query_params(conn)?;
     migrate_xml_files_discovered_to_created(conn)?;
     migrate_xml_files_processing_schema(conn)?;
+    migrate_xml_files_pairing_schema(conn)?;
+    migrate_measurement_pairs_table(conn)?;
 
     Ok(())
 }
@@ -276,6 +328,7 @@ fn migrate_xml_files_processing_schema(conn: &Connection) -> Result<(), String> 
             |row| row.get(0),
         )
         .map_err(|error| format!("Đọc schema xml_files thất bại: {error}"))?;
+    // Pairing migration sẽ rebuild tiếp nếu thiếu awaiting_pair.
     if has_columns && schema.contains("patient_not_found") {
         return Ok(());
     }
@@ -298,11 +351,16 @@ fn migrate_xml_files_processing_schema(conn: &Connection) -> Result<(), String> 
                                    CHECK (status IN (
                                      'waiting', 'processing', 'parsed', 'patient_matched', 'mapped',
                                      'sending', 'processed', 'patient_not_found', 'treatment_ambiguous',
-                                     'xml_error', 'mapping_error', 'send_error', 'failed'
+                                     'xml_error', 'mapping_error', 'send_error', 'failed',
+                                     'awaiting_pair', 'pairing', 'pairing_error', 'extra_measurement'
                                    )),
               error_message      TEXT,
               content_hash       TEXT,
               patient_code       TEXT,
+              patient_no         INTEGER,
+              measured_at        TEXT,
+              pair_id            INTEGER,
+              pair_order         INTEGER,
               nb_dot_dieu_tri_id INTEGER,
               request_payload    TEXT,
               response_payload   TEXT,
@@ -333,6 +391,133 @@ fn migrate_xml_files_processing_schema(conn: &Connection) -> Result<(), String> 
     transaction
         .commit()
         .map_err(|error| format!("Commit migration xml_files thất bại: {error}"))
+}
+
+/// Mở rộng xml_files cho workflow ghép hai lần đo KR-800 (không mất audit).
+fn migrate_xml_files_pairing_schema(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "xml_files")?;
+    let schema: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'xml_files'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Đọc schema xml_files thất bại: {error}"))?;
+
+    let has_pair_cols = ["patient_no", "measured_at", "pair_id", "pair_order"]
+        .iter()
+        .all(|name| columns.iter().any(|column| column == name));
+    if has_pair_cols && schema.contains("awaiting_pair") {
+        return Ok(());
+    }
+
+    let transaction = conn
+        .unchecked_transaction()
+        .map_err(|error| format!("Bắt đầu migration pairing xml_files thất bại: {error}"))?;
+    transaction
+        .execute_batch(
+            r#"
+            DROP TABLE IF EXISTS xml_files_pairing_migrated;
+            CREATE TABLE xml_files_pairing_migrated (
+              id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+              device_key         TEXT    NOT NULL DEFAULT 'kr-800',
+              file_name          TEXT    NOT NULL,
+              file_path          TEXT    NOT NULL UNIQUE,
+              file_size          INTEGER,
+              file_modified_at   TEXT,
+              status             TEXT    NOT NULL DEFAULT 'waiting'
+                                   CHECK (status IN (
+                                     'waiting', 'processing', 'parsed', 'patient_matched', 'mapped',
+                                     'sending', 'processed', 'patient_not_found', 'treatment_ambiguous',
+                                     'xml_error', 'mapping_error', 'send_error', 'failed',
+                                     'awaiting_pair', 'pairing', 'pairing_error', 'extra_measurement'
+                                   )),
+              error_message      TEXT,
+              content_hash       TEXT,
+              patient_code       TEXT,
+              patient_no         INTEGER,
+              measured_at        TEXT,
+              pair_id            INTEGER,
+              pair_order         INTEGER,
+              nb_dot_dieu_tri_id INTEGER,
+              request_payload    TEXT,
+              response_payload   TEXT,
+              processed_at       TEXT,
+              attempt_count      INTEGER NOT NULL DEFAULT 0,
+              created_at         TEXT    NOT NULL,
+              updated_at         TEXT    NOT NULL
+            );
+
+            INSERT INTO xml_files_pairing_migrated (
+              id, device_key, file_name, file_path, file_size, file_modified_at,
+              status, error_message, content_hash, patient_code, patient_no, measured_at,
+              pair_id, pair_order, nb_dot_dieu_tri_id, request_payload, response_payload,
+              processed_at, attempt_count, created_at, updated_at
+            )
+            SELECT
+              id, device_key, file_name, file_path, file_size, file_modified_at,
+              status, error_message, content_hash, patient_code,
+              NULL, NULL, NULL, NULL,
+              nb_dot_dieu_tri_id, request_payload, response_payload,
+              processed_at, attempt_count, created_at, updated_at
+            FROM xml_files;
+
+            DROP TABLE xml_files;
+            ALTER TABLE xml_files_pairing_migrated RENAME TO xml_files;
+            CREATE INDEX IF NOT EXISTS idx_xml_files_device_status
+              ON xml_files (device_key, status);
+            CREATE INDEX IF NOT EXISTS idx_xml_files_device_created
+              ON xml_files (device_key, created_at);
+            CREATE INDEX IF NOT EXISTS idx_xml_files_content_hash
+              ON xml_files (content_hash, status);
+            CREATE INDEX IF NOT EXISTS idx_xml_files_patient_code
+              ON xml_files (device_key, patient_code);
+            CREATE INDEX IF NOT EXISTS idx_xml_files_pair_id
+              ON xml_files (pair_id);
+            "#,
+        )
+        .map_err(|error| format!("Rebuild xml_files pairing thất bại: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Commit migration pairing xml_files thất bại: {error}"))
+}
+
+fn migrate_measurement_pairs_table(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS measurement_pairs (
+          id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+          device_key         TEXT    NOT NULL DEFAULT 'kr-800',
+          patient_code       TEXT    NOT NULL,
+          patient_code_norm  TEXT    NOT NULL,
+          file_id_1          INTEGER,
+          file_id_2          INTEGER,
+          content_hash_1     TEXT,
+          content_hash_2     TEXT,
+          patient_no_1       INTEGER,
+          patient_no_2       INTEGER,
+          measured_at_1      TEXT,
+          measured_at_2      TEXT,
+          status             TEXT    NOT NULL DEFAULT 'awaiting_pair'
+                               CHECK (status IN (
+                                 'awaiting_pair', 'pairing', 'sending', 'processed',
+                                 'pairing_error', 'send_error', 'patient_not_found',
+                                 'treatment_ambiguous', 'mapping_error'
+                               )),
+          nb_dot_dieu_tri_id INTEGER,
+          request_payload    TEXT,
+          response_payload   TEXT,
+          error_message      TEXT,
+          attempt_count      INTEGER NOT NULL DEFAULT 0,
+          processed_at       TEXT,
+          created_at         TEXT    NOT NULL,
+          updated_at         TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_measurement_pairs_patient
+          ON measurement_pairs (device_key, patient_code_norm, status);
+        "#,
+    )
+    .map_err(|error| format!("Tạo measurement_pairs thất bại: {error}"))
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
@@ -509,5 +694,128 @@ mod tests {
             [],
         )
         .expect("new detailed status is accepted");
+    }
+
+    #[test]
+    fn migrates_pairing_schema_preserves_processed_audit() {
+        let conn = Connection::open_in_memory().expect("open in-memory SQLite");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE xml_files (
+              id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+              device_key         TEXT NOT NULL DEFAULT 'kr-800',
+              file_name          TEXT NOT NULL,
+              file_path          TEXT NOT NULL UNIQUE,
+              file_size          INTEGER,
+              file_modified_at   TEXT,
+              status             TEXT NOT NULL DEFAULT 'waiting'
+                                 CHECK (status IN (
+                                   'waiting', 'processing', 'parsed', 'patient_matched', 'mapped',
+                                   'sending', 'processed', 'patient_not_found', 'treatment_ambiguous',
+                                   'xml_error', 'mapping_error', 'send_error', 'failed'
+                                 )),
+              error_message      TEXT,
+              content_hash       TEXT,
+              patient_code       TEXT,
+              nb_dot_dieu_tri_id INTEGER,
+              request_payload    TEXT,
+              response_payload   TEXT,
+              processed_at       TEXT,
+              attempt_count      INTEGER NOT NULL DEFAULT 0,
+              created_at         TEXT NOT NULL,
+              updated_at         TEXT NOT NULL
+            );
+            INSERT INTO xml_files (
+              device_key, file_name, file_path, status, content_hash, patient_code,
+              nb_dot_dieu_tri_id, request_payload, response_payload, processed_at,
+              attempt_count, created_at, updated_at
+            ) VALUES (
+              'kr-800', 'old.xml', '/tmp/old.xml', 'processed',
+              'abc123hash', 'HCM2607150275', 99,
+              '{"legacy":true}', '{"ok":true}', '2026-07-15 16:00:00',
+              2, '2026-07-15 15:12:40', '2026-07-15 16:00:00'
+            );
+            "#,
+        )
+        .expect("create pre-pairing xml_files");
+
+        migrate(&conn).expect("migrate to pairing schema");
+
+        let columns = table_columns(&conn, "xml_files").expect("columns");
+        for expected in [
+            "content_hash",
+            "patient_code",
+            "nb_dot_dieu_tri_id",
+            "request_payload",
+            "response_payload",
+            "processed_at",
+            "attempt_count",
+            "patient_no",
+            "measured_at",
+            "pair_id",
+            "pair_order",
+        ] {
+            assert!(
+                columns.iter().any(|column| column == expected),
+                "missing column {expected}"
+            );
+        }
+
+        let row = conn
+            .query_row(
+                r#"
+                SELECT status, content_hash, patient_code, nb_dot_dieu_tri_id,
+                       request_payload, response_payload, processed_at, attempt_count
+                FROM xml_files WHERE file_path = '/tmp/old.xml'
+                "#,
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )
+            .expect("read preserved audit");
+
+        assert_eq!(row.0, "processed");
+        assert_eq!(row.1, "abc123hash");
+        assert_eq!(row.2, "HCM2607150275");
+        assert_eq!(row.3, 99);
+        assert_eq!(row.4, r#"{"legacy":true}"#);
+        assert_eq!(row.5, r#"{"ok":true}"#);
+        assert_eq!(row.6, "2026-07-15 16:00:00");
+        assert_eq!(row.7, 2);
+
+        // Không tự chuyển processed → waiting (không gửi lại sau migration).
+        let waiting: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM xml_files WHERE status = 'waiting'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count waiting");
+        assert_eq!(waiting, 0);
+
+        conn.execute(
+            "UPDATE xml_files SET status = 'awaiting_pair' WHERE id = 1",
+            [],
+        )
+        .expect("new pairing status accepted");
+
+        let pairs_exist: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='measurement_pairs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("pairs table");
+        assert_eq!(pairs_exist, 1);
     }
 }

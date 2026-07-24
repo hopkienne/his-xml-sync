@@ -96,7 +96,7 @@ async fn run_loop(app: AppHandle) {
                             true,
                             Some(folder.clone()),
                             if auto_on {
-                                "Đang theo dõi folder (tự quét nền + tự xử lý file waiting)."
+                                "Đang theo dõi folder (tự quét nền + tự ghép cặp / gửi HIS)."
                             } else {
                                 "Đang theo dõi folder (tự quét nền). Tự xử lý HIS đang TẮT."
                             },
@@ -486,6 +486,21 @@ fn auto_event_from_result(
 ) -> AutoProcessEvent {
     let message = if result.total == 0 {
         "Không có file chờ xử lý trong khoảng tự động.".into()
+    } else if result.awaiting_pair > 0
+        && result.processed == 0
+        && result.failed == 0
+        && result.skipped == 0
+    {
+        // Chỉ nhận lần đo 1 — thông tin bình thường, không phải lỗi HIS.
+        format!(
+            "Đã nhận {} lần đo 1, đang chờ lần đo 2.",
+            result.awaiting_pair
+        )
+    } else if result.awaiting_pair > 0 {
+        format!(
+            "Tự xử lý: {} cặp thành công; chờ lần đo 2: {}; bỏ qua {}; lỗi {}.",
+            result.processed, result.awaiting_pair, result.skipped, result.failed
+        )
     } else {
         format!(
             "Tự xử lý: {}/{} thành công; bỏ qua {}; lỗi {}.",

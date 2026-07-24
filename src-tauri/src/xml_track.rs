@@ -84,6 +84,14 @@ pub enum XmlFileStatus {
     MappingError,
     SendError,
     Failed,
+    /// Đã parse hợp lệ, đang chờ lần đo thứ hai cùng Patient.ID.
+    AwaitingPair,
+    /// Đang ghép cặp / chuẩn bị gửi.
+    Pairing,
+    /// measuredAt và Patient.No. mâu thuẫn khi ghép.
+    PairingError,
+    /// Lần đo thừa sau khi đã có cặp.
+    ExtraMeasurement,
 }
 
 impl XmlFileStatus {
@@ -101,6 +109,10 @@ impl XmlFileStatus {
             "mapping_error" => Self::MappingError,
             "send_error" => Self::SendError,
             "failed" => Self::Failed,
+            "awaiting_pair" => Self::AwaitingPair,
+            "pairing" => Self::Pairing,
+            "pairing_error" => Self::PairingError,
+            "extra_measurement" => Self::ExtraMeasurement,
             _ => Self::Waiting,
         }
     }
@@ -746,7 +758,10 @@ fn insert_new_in_folder(
     })
 }
 
-/// Số file đang `waiting` trong khoảng `created_at`.
+/// Số file cần pipeline xử lý trong khoảng `created_at`.
+///
+/// Gồm `waiting` và các trạng thái retry; **không** đếm `awaiting_pair` như lỗi,
+/// nhưng vẫn tính để periodic process biết còn cặp dở (chờ lần 2 / retry).
 pub fn count_waiting_in_range(
     db: &AppDb,
     device_key: &str,
@@ -758,7 +773,15 @@ pub fn count_waiting_in_range(
         r#"
         SELECT COUNT(*) FROM xml_files
         WHERE device_key = ?1
-          AND status = 'waiting'
+          AND status IN (
+            'waiting',
+            'awaiting_pair',
+            'send_error',
+            'patient_not_found',
+            'treatment_ambiguous',
+            'mapping_error',
+            'pairing'
+          )
           AND created_at >= ?2
           AND created_at <= ?3
         "#,
@@ -766,7 +789,30 @@ pub fn count_waiting_in_range(
         |row| row.get::<_, i64>(0),
     )
     .map(|n| n as usize)
-    .map_err(|e| format!("Đếm waiting thất bại: {e}"))
+    .map_err(|e| format!("Đếm pending thất bại: {e}"))
+}
+
+/// Đếm riêng file đang chờ lần đo 2 (info, không phải lỗi).
+pub fn count_awaiting_pair_in_range(
+    db: &AppDb,
+    device_key: &str,
+    from_time: &str,
+    to_time: &str,
+) -> Result<usize, String> {
+    let conn = lock_conn(db)?;
+    conn.query_row(
+        r#"
+        SELECT COUNT(*) FROM xml_files
+        WHERE device_key = ?1
+          AND status = 'awaiting_pair'
+          AND created_at >= ?2
+          AND created_at <= ?3
+        "#,
+        params![device_key, from_time, to_time],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n as usize)
+    .map_err(|e| format!("Đếm awaiting_pair thất bại: {e}"))
 }
 
 fn load_existing_paths(
@@ -1135,8 +1181,14 @@ fn list_files_conn_in_range(
             ORDER BY
               CASE status
                 WHEN 'failed' THEN 0
+                WHEN 'pairing_error' THEN 0
+                WHEN 'send_error' THEN 0
+                WHEN 'extra_measurement' THEN 0
                 WHEN 'processing' THEN 1
+                WHEN 'pairing' THEN 1
+                WHEN 'sending' THEN 1
                 WHEN 'waiting' THEN 2
+                WHEN 'awaiting_pair' THEN 2
                 WHEN 'processed' THEN 3
                 ELSE 4
               END,

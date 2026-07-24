@@ -6,6 +6,7 @@ mod his_api;
 mod kr800_process;
 mod license;
 pub mod license_core;
+mod measurement_pair;
 mod settings;
 mod sync;
 mod tray;

@@ -206,6 +206,8 @@ export type Kr800ProcessResult = {
   processed: number;
   failed: number;
   skipped: number;
+  /** File lần đo 1 đang chờ lần 2 (không phải lỗi). */
+  awaitingPair?: number;
   files: TrackedXmlFile[];
 };
 

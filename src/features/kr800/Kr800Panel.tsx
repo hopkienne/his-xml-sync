@@ -69,6 +69,10 @@ const statusLabel: Record<TrackedXmlStatus, string> = {
   mapping_error: "Lỗi mapping danh mục",
   send_error: "Lỗi gửi HIS",
   failed: "Thất bại",
+  awaiting_pair: "Chờ lần đo 2",
+  pairing: "Đang ghép cặp",
+  pairing_error: "Lỗi ghép cặp",
+  extra_measurement: "Phát hiện lần đo thừa",
 };
 
 export function Kr800Panel({
@@ -696,14 +700,17 @@ function formatStoredDateTime(value?: string | null): string {
 function countByStatus(files: TrackedXmlFile[]) {
   const counts = { waiting: 0, processing: 0, processed: 0, failed: 0 };
   for (const file of files) {
-    if (file.status === "waiting") counts.waiting += 1;
-    else if (file.status === "processed") counts.processed += 1;
-    else if (
+    if (file.status === "waiting" || file.status === "awaiting_pair") {
+      counts.waiting += 1;
+    } else if (file.status === "processed") {
+      counts.processed += 1;
+    } else if (
       file.status === "processing" ||
       file.status === "parsed" ||
       file.status === "patient_matched" ||
       file.status === "mapped" ||
-      file.status === "sending"
+      file.status === "sending" ||
+      file.status === "pairing"
     ) {
       counts.processing += 1;
     } else {
@@ -714,16 +721,20 @@ function countByStatus(files: TrackedXmlFile[]) {
 }
 
 function statusTone(status: TrackedXmlStatus): "waiting" | "processing" | "processed" | "failed" {
-  if (status === "waiting") return "waiting";
+  if (status === "waiting" || status === "awaiting_pair") return "waiting";
   if (status === "processed") return "processed";
-  if (["processing", "parsed", "patient_matched", "mapped", "sending"].includes(status)) {
+  if (
+    ["processing", "parsed", "patient_matched", "mapped", "sending", "pairing"].includes(status)
+  ) {
     return "processing";
   }
   return "failed";
 }
 
 function isActiveFileStatus(status: TrackedXmlStatus): boolean {
-  return ["processing", "parsed", "patient_matched", "mapped", "sending"].includes(status);
+  return ["processing", "parsed", "patient_matched", "mapped", "sending", "pairing"].includes(
+    status,
+  );
 }
 
 function formatSize(bytes?: number | null) {

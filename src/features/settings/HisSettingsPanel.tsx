@@ -129,22 +129,6 @@ export function HisSettingsPanel({
               />
             </label>
 
-            <label className="field-checkbox form-grid--full">
-              <input
-                type="checkbox"
-                checked={settings.copyRefractionToNewGlasses}
-                onChange={(event) =>
-                  onChange({
-                    ...settings,
-                    copyRefractionToNewGlasses: event.currentTarget.checked,
-                  })
-                }
-              />
-              <span>
-                Sao chép kết quả khúc xạ sang kính mới
-                <small>Mặc định tắt</small>
-              </span>
-            </label>
           </div>
 
           {saveError ? (
