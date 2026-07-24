@@ -136,8 +136,11 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
           response_payload   TEXT,
           error_message      TEXT,
           attempt_count      INTEGER NOT NULL DEFAULT 0,
-          -- Thời điểm claim sending (audit / orphan recovery).
+          -- Thời điểm claim sending (audit).
           sending_started_at TEXT,
+          -- DB lease: owner process + hạn reclaim (multi-instance safe).
+          sending_owner_id   TEXT,
+          sending_lease_until TEXT,
           processed_at       TEXT,
           created_at         TEXT    NOT NULL,
           updated_at         TEXT    NOT NULL
@@ -174,6 +177,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     migrate_measurement_pairs_table(conn)?;
     migrate_xml_files_measurement_snapshot(conn)?;
     migrate_measurement_pairs_sending_started_at(conn)?;
+    migrate_measurement_pairs_sending_lease(conn)?;
 
     Ok(())
 }
@@ -516,6 +520,8 @@ fn migrate_measurement_pairs_table(conn: &Connection) -> Result<(), String> {
           error_message      TEXT,
           attempt_count      INTEGER NOT NULL DEFAULT 0,
           sending_started_at TEXT,
+          sending_owner_id   TEXT,
+          sending_lease_until TEXT,
           processed_at       TEXT,
           created_at         TEXT    NOT NULL,
           updated_at         TEXT    NOT NULL
@@ -545,6 +551,21 @@ fn migrate_measurement_pairs_sending_started_at(conn: &Connection) -> Result<(),
     }
     conn.execute_batch("ALTER TABLE measurement_pairs ADD COLUMN sending_started_at TEXT;")
         .map_err(|error| format!("Thêm sending_started_at thất bại: {error}"))
+}
+
+/// Lease multi-instance: owner + hạn reclaim (ALTER only, không rebuild).
+fn migrate_measurement_pairs_sending_lease(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "measurement_pairs")?;
+    if !columns.iter().any(|column| column == "sending_owner_id") {
+        conn.execute_batch("ALTER TABLE measurement_pairs ADD COLUMN sending_owner_id TEXT;")
+            .map_err(|error| format!("Thêm sending_owner_id thất bại: {error}"))?;
+    }
+    let columns = table_columns(conn, "measurement_pairs")?;
+    if !columns.iter().any(|column| column == "sending_lease_until") {
+        conn.execute_batch("ALTER TABLE measurement_pairs ADD COLUMN sending_lease_until TEXT;")
+            .map_err(|error| format!("Thêm sending_lease_until thất bại: {error}"))?;
+    }
+    Ok(())
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
@@ -793,6 +814,14 @@ mod tests {
         assert!(
             pair_cols.iter().any(|c| c == "sending_started_at"),
             "missing sending_started_at"
+        );
+        assert!(
+            pair_cols.iter().any(|c| c == "sending_owner_id"),
+            "missing sending_owner_id"
+        );
+        assert!(
+            pair_cols.iter().any(|c| c == "sending_lease_until"),
+            "missing sending_lease_until"
         );
 
         let row = conn

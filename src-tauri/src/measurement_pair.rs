@@ -16,6 +16,20 @@ use std::sync::MutexGuard;
 
 pub const DEVICE_KEY: &str = "kr-800";
 
+/// Thời hạn lease mỗi lần claim/gia hạn.
+/// Phải dài hơn HTTP timeout (30s) + backoff transient; được renew mỗi attempt.
+pub const SENDING_LEASE_SECS: i64 = 120;
+
+/// Tạo instance_id duy nhất cho một process app (PID + nanos).
+pub fn generate_instance_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("kr800-{}-{}", std::process::id(), nanos)
+}
+
 /// Snapshot đã parse — nguồn duy nhất cho payload PUT (không đọc lại file mutable).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -545,35 +559,41 @@ pub fn resolve_pair_for_measurement(
 }
 
 fn complete_pair_rows(tx: &Transaction<'_>, pair_id: i64, ordered: &OrderedPair) -> Result<(), String> {
-    tx.execute(
-        r#"
-        UPDATE measurement_pairs SET
-          file_id_1 = ?1,
-          file_id_2 = ?2,
-          content_hash_1 = ?3,
-          content_hash_2 = ?4,
-          patient_no_1 = ?5,
-          patient_no_2 = ?6,
-          measured_at_1 = ?7,
-          measured_at_2 = ?8,
-          status = 'pairing',
-          error_message = NULL,
-          updated_at = datetime('now')
-        WHERE id = ?9
-        "#,
-        params![
-            ordered.first.file_id,
-            ordered.second.file_id,
-            ordered.first.content_hash,
-            ordered.second.content_hash,
-            ordered.first.patient_no,
-            ordered.second.patient_no,
-            ordered.first.measured_at,
-            ordered.second.measured_at,
-            pair_id
-        ],
-    )
-    .map_err(|e| format!("Cập nhật measurement_pairs sẵn sàng thất bại: {e}"))?;
+    let n = tx
+        .execute(
+            r#"
+            UPDATE measurement_pairs SET
+              file_id_1 = ?1,
+              file_id_2 = ?2,
+              content_hash_1 = ?3,
+              content_hash_2 = ?4,
+              patient_no_1 = ?5,
+              patient_no_2 = ?6,
+              measured_at_1 = ?7,
+              measured_at_2 = ?8,
+              status = 'pairing',
+              error_message = NULL,
+              updated_at = datetime('now')
+            WHERE id = ?9 AND status = 'awaiting_pair'
+            "#,
+            params![
+                ordered.first.file_id,
+                ordered.second.file_id,
+                ordered.first.content_hash,
+                ordered.second.content_hash,
+                ordered.first.patient_no,
+                ordered.second.patient_no,
+                ordered.first.measured_at,
+                ordered.second.measured_at,
+                pair_id
+            ],
+        )
+        .map_err(|e| format!("Cập nhật measurement_pairs sẵn sàng thất bại: {e}"))?;
+    if n != 1 {
+        return Err(format!(
+            "complete_pair_rows pair_id={pair_id}: UPDATE rows={n} (cần status=awaiting_pair)"
+        ));
+    }
 
     attach_file_to_pair(tx, ordered.first.file_id, pair_id, Some(1), "pairing")?;
     attach_file_to_pair(tx, ordered.second.file_id, pair_id, Some(2), "pairing")?;
@@ -644,7 +664,7 @@ fn mark_pairing_error(
           status = 'pairing_error',
           error_message = ?2,
           updated_at = datetime('now')
-        WHERE id = ?3
+        WHERE id = ?3 AND status = 'awaiting_pair'
         "#,
         params![file_b, message, pair_id],
     )
@@ -823,93 +843,81 @@ fn load_meta(tx: &Transaction<'_>, file_id: i64) -> Result<MeasurementMeta, Stri
     .map_err(|e| format!("Đọc metadata file id={file_id} thất bại: {e}"))
 }
 
-/// Gọi ngay sau khi pipeline giữ `run_lock`: mọi pair `sending` còn sót là orphan
-/// (crash/kill giữa chừng) → chuyển `send_error` atomic để retry cùng pair/payload.
+/// Recovery pair `sending` **hết lease** (hoặc legacy lease NULL) → `send_error`.
+/// Không reclaim pair còn lease hiệu lực (instance khác đang gửi).
 ///
-/// Mỗi pair recover trong transaction riêng — một pair hỏng không chặn các pair khác.
-pub fn recover_orphaned_sending_pairs(db: &AppDb) -> Result<usize, String> {
-    let orphans: Vec<(i64, Option<i64>, Option<i64>, String)> = {
+/// Gọi được khi startup / poll — **không** cần XML `waiting`.
+pub fn recover_expired_sending_pairs(db: &AppDb) -> Result<usize, String> {
+    let candidates: Vec<(i64, Option<i64>, Option<i64>)> = {
         let conn = lock_conn(db)?;
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, file_id_1, file_id_2, status
+                SELECT id, file_id_1, file_id_2
                 FROM measurement_pairs
-                WHERE device_key = ?1 AND status = 'sending'
+                WHERE device_key = ?1
+                  AND status = 'sending'
+                  AND (
+                    sending_lease_until IS NULL
+                    OR sending_lease_until <= datetime('now')
+                  )
                 "#,
             )
-            .map_err(|e| format!("recover_orphaned_sending prepare: {e}"))?;
+            .map_err(|e| format!("recover_expired_sending prepare: {e}"))?;
         let rows = stmt
             .query_map(params![DEVICE_KEY], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, Option<i64>>(1)?,
                     row.get::<_, Option<i64>>(2)?,
-                    row.get::<_, String>(3)?,
                 ))
             })
-            .map_err(|e| format!("recover_orphaned_sending query: {e}"))?;
+            .map_err(|e| format!("recover_expired_sending query: {e}"))?;
         let mut list = Vec::new();
         for row in rows {
-            list.push(row.map_err(|e| format!("recover_orphaned_sending row: {e}"))?);
+            list.push(row.map_err(|e| format!("recover_expired_sending row: {e}"))?);
         }
         list
     };
 
     let mut recovered = 0usize;
     let message =
-        "Phục hồi sau gửi bị gián đoạn (sending orphan) — sẽ retry cùng pair/payload.";
-    for (pair_id, f1, f2, from_status) in orphans {
+        "Phục hồi pair sending hết lease (orphan/crash) — sẽ retry cùng pair/payload.";
+    for (pair_id, f1, f2) in candidates {
         let mut conn = lock_conn(db)?;
         let tx = conn.transaction().map_err(|e| {
-            format!("recover_orphaned_sending pair_id={pair_id} begin tx: {e}")
+            format!("recover_expired_sending pair_id={pair_id} begin tx: {e}")
         })?;
-        // Re-check status trong tx (tránh race nếu có).
-        let still_sending: bool = tx
-            .query_row(
-                "SELECT status FROM measurement_pairs WHERE id = ?1",
-                params![pair_id],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|e| format!("recover recheck pair_id={pair_id}: {e}"))?
-            .map(|s| s == "sending")
-            .unwrap_or(false);
-        if !still_sending {
-            tx.commit().ok();
-            continue;
-        }
-        match apply_pair_and_two_files_status(
+        match transition_sending_to_error(
             &tx,
             pair_id,
             f1,
             f2,
-            &from_status,
+            None, // lease reclaim — không cần owner
+            true, // require lease expired
             "send_error",
             message,
-            "recover_orphaned_sending",
-            false,
-            true,
+            "recover_expired_sending",
         ) {
             Ok(()) => {
                 tx.commit().map_err(|e| {
-                    format!("recover_orphaned_sending pair_id={pair_id} commit: {e}")
+                    format!("recover_expired_sending pair_id={pair_id} commit: {e}")
                 })?;
                 recovered += 1;
                 app_logger::warn(
                     "kr800",
                     &format!(
-                        "pair_id={pair_id} recovered orphaned sending → send_error (file1={:?} file2={:?})",
+                        "pair_id={pair_id} recovered expired sending → send_error (file1={:?} file2={:?})",
                         f1, f2
                     ),
                 );
             }
             Err(error) => {
-                // Rollback pair này; tiếp tục pair khác.
                 drop(tx);
-                app_logger::error(
+                // Lease còn sống hoặc đã chuyển trạng thái — bỏ qua im lặng ở mức debug.
+                app_logger::info(
                     "kr800",
-                    &format!("pair_id={pair_id} recover orphaned failed: {error}"),
+                    &format!("pair_id={pair_id} recover skip: {error}"),
                 );
             }
         }
@@ -917,9 +925,13 @@ pub fn recover_orphaned_sending_pairs(db: &AppDb) -> Result<usize, String> {
     Ok(recovered)
 }
 
-/// Claim cặp để gửi HIS — transaction; chỉ một task thắng.
-/// Không claim pair đang `sending` hợp lệ (task khác); orphan đã được recover trước đó.
-pub fn claim_pair_for_send(db: &AppDb, pair_id: i64) -> Result<bool, String> {
+/// @deprecated alias — dùng `recover_expired_sending_pairs`.
+pub fn recover_orphaned_sending_pairs(db: &AppDb) -> Result<usize, String> {
+    recover_expired_sending_pairs(db)
+}
+
+/// Claim cặp để gửi HIS — CAS status + gắn owner/lease.
+pub fn claim_pair_for_send(db: &AppDb, pair_id: i64, owner_id: &str) -> Result<bool, String> {
     let mut conn = lock_conn(db)?;
     let tx = conn
         .transaction()
@@ -938,6 +950,16 @@ pub fn claim_pair_for_send(db: &AppDb, pair_id: i64) -> Result<bool, String> {
         ));
     };
 
+    if !matches!(
+        from.as_str(),
+        "pairing" | "send_error" | "patient_not_found" | "treatment_ambiguous" | "mapping_error"
+    ) {
+        tx.commit()
+            .map_err(|e| format!("claim_pair commit (skip): {e}"))?;
+        return Ok(false);
+    }
+
+    let lease_mod = format!("+{SENDING_LEASE_SECS} seconds");
     let changed = tx
         .execute(
             r#"
@@ -945,6 +967,8 @@ pub fn claim_pair_for_send(db: &AppDb, pair_id: i64) -> Result<bool, String> {
               status = 'sending',
               error_message = NULL,
               sending_started_at = datetime('now'),
+              sending_owner_id = ?2,
+              sending_lease_until = datetime('now', ?3),
               updated_at = datetime('now')
             WHERE id = ?1
               AND status IN (
@@ -952,7 +976,7 @@ pub fn claim_pair_for_send(db: &AppDb, pair_id: i64) -> Result<bool, String> {
                 'treatment_ambiguous', 'mapping_error'
               )
             "#,
-            params![pair_id],
+            params![pair_id, owner_id, lease_mod],
         )
         .map_err(|e| {
             transition_log(pair_id, "claim_pair", &from, "sending", &format!("SQL pair: {e}"))
@@ -981,6 +1005,10 @@ pub fn claim_pair_for_send(db: &AppDb, pair_id: i64) -> Result<bool, String> {
               error_message = NULL,
               updated_at = datetime('now')
             WHERE pair_id = ?1 AND id IN (?2, ?3)
+              AND status IN (
+                'pairing', 'send_error', 'patient_not_found',
+                'treatment_ambiguous', 'mapping_error', 'sending'
+              )
             "#,
             params![pair_id, id1, id2],
         )
@@ -1014,6 +1042,7 @@ pub fn save_pair_request(
     pair_id: i64,
     treatment_id: i64,
     payload_json: &str,
+    owner_id: &str,
 ) -> Result<(), String> {
     let mut conn = lock_conn(db)?;
     let tx = conn
@@ -1040,9 +1069,11 @@ pub fn save_pair_request(
               request_payload = ?2,
               status = 'sending',
               updated_at = datetime('now')
-            WHERE id = ?3 AND status = 'sending'
+            WHERE id = ?3
+              AND status = 'sending'
+              AND sending_owner_id = ?4
             "#,
-            params![treatment_id, payload_json, pair_id],
+            params![treatment_id, payload_json, pair_id, owner_id],
         )
         .map_err(|e| {
             transition_log(
@@ -1059,7 +1090,9 @@ pub fn save_pair_request(
             "save_pair_request",
             &from,
             "sending",
-            &format!("pair UPDATE rows={n} (cần status=sending)"),
+            &format!(
+                "pair UPDATE rows={n} (cần status=sending và owner={owner_id})"
+            ),
         ));
     }
 
@@ -1106,8 +1139,13 @@ pub fn save_pair_request(
     Ok(())
 }
 
-/// Chỉ Ok khi pair + đúng hai XML đã `processed` (cùng transaction).
-pub fn finish_pair_success(db: &AppDb, pair_id: i64, response: &str) -> Result<(), String> {
+/// Chỉ Ok khi pair + đúng hai XML đã `processed` (cùng transaction, đúng owner).
+pub fn finish_pair_success(
+    db: &AppDb,
+    pair_id: i64,
+    response: &str,
+    owner_id: &str,
+) -> Result<(), String> {
     let mut conn = lock_conn(db)?;
     let tx = conn
         .transaction()
@@ -1133,11 +1171,15 @@ pub fn finish_pair_success(db: &AppDb, pair_id: i64, response: &str) -> Result<(
               error_message = NULL,
               response_payload = ?1,
               sending_started_at = NULL,
+              sending_owner_id = NULL,
+              sending_lease_until = NULL,
               processed_at = datetime('now'),
               updated_at = datetime('now')
-            WHERE id = ?2 AND status = 'sending'
+            WHERE id = ?2
+              AND status = 'sending'
+              AND sending_owner_id = ?3
             "#,
-            params![response, pair_id],
+            params![response, pair_id, owner_id],
         )
         .map_err(|e| {
             transition_log(
@@ -1154,7 +1196,9 @@ pub fn finish_pair_success(db: &AppDb, pair_id: i64, response: &str) -> Result<(
             "finish_pair_success",
             &from,
             "processed",
-            &format!("pair UPDATE rows={n} (cần status=sending)"),
+            &format!(
+                "pair UPDATE rows={n} (cần status=sending và owner={owner_id}; không ghi đè processed)"
+            ),
         ));
     }
 
@@ -1167,7 +1211,7 @@ pub fn finish_pair_success(db: &AppDb, pair_id: i64, response: &str) -> Result<(
               response_payload = ?1,
               processed_at = datetime('now'),
               updated_at = datetime('now')
-            WHERE pair_id = ?2 AND id IN (?3, ?4)
+            WHERE pair_id = ?2 AND id IN (?3, ?4) AND status = 'sending'
             "#,
             params![response, pair_id, id1, id2],
         )
@@ -1199,7 +1243,6 @@ pub fn finish_pair_success(db: &AppDb, pair_id: i64, response: &str) -> Result<(
         "processed",
     )?;
 
-    // Xác nhận trạng thái sau update trong cùng tx.
     let pair_status: String = tx
         .query_row(
             "SELECT status FROM measurement_pairs WHERE id = ?1",
@@ -1248,7 +1291,19 @@ pub fn finish_pair_success(db: &AppDb, pair_id: i64, response: &str) -> Result<(
     Ok(())
 }
 
-pub fn fail_pair(db: &AppDb, pair_id: i64, status: &str, message: &str) -> Result<(), String> {
+/// Error path sau claim: chỉ owner hiện tại, chỉ từ `sending`, không đụng `processed`/`pairing_error`.
+pub fn fail_pair(
+    db: &AppDb,
+    pair_id: i64,
+    status: &str,
+    message: &str,
+    owner_id: &str,
+) -> Result<(), String> {
+    if !is_allowed_error_status(status) {
+        return Err(format!(
+            "fail_pair: status đích không hợp lệ từ sending: {status}"
+        ));
+    }
     let mut conn = lock_conn(db)?;
     let tx = conn
         .transaction()
@@ -1256,17 +1311,16 @@ pub fn fail_pair(db: &AppDb, pair_id: i64, status: &str, message: &str) -> Resul
     let pair = load_pair(&tx, pair_id)?
         .ok_or_else(|| format!("fail_pair: thiếu pair_id={pair_id}"))?;
     let from = pair.status.clone();
-    apply_pair_and_two_files_status(
+    transition_sending_to_error(
         &tx,
         pair_id,
         pair.file_id_1,
         pair.file_id_2,
-        &from,
+        Some(owner_id),
+        false,
         status,
         message,
         "fail_pair",
-        false,
-        true,
     )?;
     tx.commit().map_err(|e| {
         transition_log(
@@ -1280,7 +1334,8 @@ pub fn fail_pair(db: &AppDb, pair_id: i64, status: &str, message: &str) -> Resul
     Ok(())
 }
 
-pub fn increment_pair_attempt(db: &AppDb, pair_id: i64) -> Result<(), String> {
+/// Tăng attempt + gia hạn lease — chỉ owner.
+pub fn increment_pair_attempt(db: &AppDb, pair_id: i64, owner_id: &str) -> Result<(), String> {
     let mut conn = lock_conn(db)?;
     let tx = conn
         .transaction()
@@ -1298,15 +1353,19 @@ pub fn increment_pair_attempt(db: &AppDb, pair_id: i64) -> Result<(), String> {
         ));
     };
 
+    let lease_mod = format!("+{SENDING_LEASE_SECS} seconds");
     let n = tx
         .execute(
             r#"
             UPDATE measurement_pairs SET
               attempt_count = attempt_count + 1,
+              sending_lease_until = datetime('now', ?2),
               updated_at = datetime('now')
-            WHERE id = ?1 AND status = 'sending'
+            WHERE id = ?1
+              AND status = 'sending'
+              AND sending_owner_id = ?3
             "#,
-            params![pair_id],
+            params![pair_id, lease_mod, owner_id],
         )
         .map_err(|e| {
             transition_log(
@@ -1323,7 +1382,7 @@ pub fn increment_pair_attempt(db: &AppDb, pair_id: i64) -> Result<(), String> {
             "increment_pair_attempt",
             &from,
             "sending",
-            &format!("pair UPDATE rows={n}"),
+            &format!("pair UPDATE rows={n} (cần owner={owner_id})"),
         ));
     }
     let files = tx
@@ -1366,7 +1425,7 @@ pub fn increment_pair_attempt(db: &AppDb, pair_id: i64) -> Result<(), String> {
     Ok(())
 }
 
-/// Cặp cần retry (không gồm `sending` đang live — orphan đã recover → send_error).
+/// Cặp cần retry (không gồm `sending` live; expired sending phải recover trước).
 pub fn retryable_pairs(db: &AppDb) -> Result<Vec<i64>, String> {
     let conn = lock_conn(db)?;
     let mut stmt = conn
@@ -1394,55 +1453,160 @@ pub fn retryable_pairs(db: &AppDb) -> Result<Vec<i64>, String> {
     Ok(ids)
 }
 
-/// Cập nhật status pair + đúng 2 XML trong transaction đang mở.
-fn apply_pair_and_two_files_status(
+/// Đếm pair chờ retry + sending đã hết lease (watcher, không phụ thuộc waiting XML).
+pub fn count_pending_pair_work(db: &AppDb) -> Result<PendingPairWork, String> {
+    let conn = lock_conn(db)?;
+    let retryable: i64 = conn
+        .query_row(
+            r#"
+            SELECT COUNT(*) FROM measurement_pairs
+            WHERE device_key = ?1
+              AND status IN (
+                'pairing', 'send_error', 'patient_not_found',
+                'treatment_ambiguous', 'mapping_error'
+              )
+              AND file_id_1 IS NOT NULL AND file_id_2 IS NOT NULL
+            "#,
+            params![DEVICE_KEY],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("count retryable pairs: {e}"))?;
+    let expired_sending: i64 = conn
+        .query_row(
+            r#"
+            SELECT COUNT(*) FROM measurement_pairs
+            WHERE device_key = ?1
+              AND status = 'sending'
+              AND (
+                sending_lease_until IS NULL
+                OR sending_lease_until <= datetime('now')
+              )
+            "#,
+            params![DEVICE_KEY],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("count expired sending: {e}"))?;
+    Ok(PendingPairWork {
+        retryable: retryable as usize,
+        expired_sending: expired_sending as usize,
+    })
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PendingPairWork {
+    pub retryable: usize,
+    pub expired_sending: usize,
+}
+
+impl PendingPairWork {
+    pub fn total(self) -> usize {
+        self.retryable + self.expired_sending
+    }
+}
+
+fn is_allowed_error_status(status: &str) -> bool {
+    matches!(
+        status,
+        "send_error" | "mapping_error" | "patient_not_found" | "treatment_ambiguous"
+    )
+}
+
+/// CAS: `sending` → error status. Owner path hoặc lease-expired reclaim.
+fn transition_sending_to_error(
     tx: &Transaction<'_>,
     pair_id: i64,
     file_id_1: Option<i64>,
     file_id_2: Option<i64>,
-    from: &str,
+    owner_id: Option<&str>,
+    require_lease_expired: bool,
     to_status: &str,
     message: &str,
     transition: &str,
-    _require_from_sending: bool,
-    clear_sending_started: bool,
 ) -> Result<(), String> {
-    let pair_sql = if clear_sending_started {
-        r#"
-        UPDATE measurement_pairs SET
-          status = ?1,
-          error_message = ?2,
-          sending_started_at = NULL,
-          updated_at = datetime('now')
-        WHERE id = ?3
-        "#
-    } else {
-        r#"
-        UPDATE measurement_pairs SET
-          status = ?1,
-          error_message = ?2,
-          updated_at = datetime('now')
-        WHERE id = ?3
-        "#
-    };
-    let n = tx
-        .execute(pair_sql, params![to_status, message, pair_id])
-        .map_err(|e| {
-            transition_log(
-                pair_id,
-                transition,
-                from,
-                to_status,
-                &format!("SQL pair: {e}"),
-            )
-        })?;
-    if n != 1 {
+    if !is_allowed_error_status(to_status) {
         return Err(transition_log(
             pair_id,
             transition,
-            from,
+            "sending",
             to_status,
-            &format!("pair UPDATE rows={n}"),
+            "status đích không thuộc error cho phép",
+        ));
+    }
+
+    let n = if require_lease_expired {
+        // Reclaim: không cần owner; chỉ khi lease hết / NULL.
+        tx.execute(
+            r#"
+            UPDATE measurement_pairs SET
+              status = ?1,
+              error_message = ?2,
+              sending_started_at = NULL,
+              sending_owner_id = NULL,
+              sending_lease_until = NULL,
+              updated_at = datetime('now')
+            WHERE id = ?3
+              AND status = 'sending'
+              AND (
+                sending_lease_until IS NULL
+                OR sending_lease_until <= datetime('now')
+              )
+            "#,
+            params![to_status, message, pair_id],
+        )
+    } else {
+        let owner = owner_id.ok_or_else(|| {
+            transition_log(
+                pair_id,
+                transition,
+                "sending",
+                to_status,
+                "thiếu owner_id cho fail path",
+            )
+        })?;
+        tx.execute(
+            r#"
+            UPDATE measurement_pairs SET
+              status = ?1,
+              error_message = ?2,
+              sending_started_at = NULL,
+              sending_owner_id = NULL,
+              sending_lease_until = NULL,
+              updated_at = datetime('now')
+            WHERE id = ?3
+              AND status = 'sending'
+              AND sending_owner_id = ?4
+            "#,
+            params![to_status, message, pair_id, owner],
+        )
+    }
+    .map_err(|e| {
+        transition_log(
+            pair_id,
+            transition,
+            "sending",
+            to_status,
+            &format!("SQL pair: {e}"),
+        )
+    })?;
+
+    if n != 1 {
+        // Đọc status hiện tại để log (có thể đã processed).
+        let current: String = tx
+            .query_row(
+                "SELECT status FROM measurement_pairs WHERE id = ?1",
+                params![pair_id],
+                |r| r.get(0),
+            )
+            .unwrap_or_else(|_| "missing".into());
+        return Err(transition_log(
+            pair_id,
+            transition,
+            &current,
+            to_status,
+            &format!(
+                "CAS failed rows={n} owner={:?} lease_expired_required={require_lease_expired} (không ghi đè processed/pairing_error)",
+                owner_id
+            ),
         ));
     }
 
@@ -1456,6 +1620,7 @@ fn apply_pair_and_two_files_status(
                       error_message = ?2,
                       updated_at = datetime('now')
                     WHERE pair_id = ?3 AND id IN (?4, ?5)
+                      AND status = 'sending'
                     "#,
                     params![to_status, message, pair_id, id1, id2],
                 )
@@ -1463,7 +1628,7 @@ fn apply_pair_and_two_files_status(
                     transition_log(
                         pair_id,
                         transition,
-                        from,
+                        "sending",
                         to_status,
                         &format!("SQL xml: {e}"),
                     )
@@ -1472,36 +1637,23 @@ fn apply_pair_and_two_files_status(
                 return Err(transition_log(
                     pair_id,
                     transition,
-                    from,
+                    "sending",
                     to_status,
-                    &format!("xml_files UPDATE rows={files} (kỳ vọng 2)"),
+                    &format!("xml_files UPDATE rows={files} (kỳ vọng 2, status=sending)"),
                 ));
             }
             assert_exactly_two_files_for_pair(
-                tx, pair_id, id1, id2, transition, from, to_status,
+                tx, pair_id, id1, id2, transition, "sending", to_status,
             )?;
         }
         _ => {
-            // Pair chưa đủ 2 file (awaiting) — cập nhật mọi XML gắn pair_id.
-            tx.execute(
-                r#"
-                UPDATE xml_files SET
-                  status = ?1,
-                  error_message = ?2,
-                  updated_at = datetime('now')
-                WHERE pair_id = ?3
-                "#,
-                params![to_status, message, pair_id],
-            )
-            .map_err(|e| {
-                transition_log(
-                    pair_id,
-                    transition,
-                    from,
-                    to_status,
-                    &format!("SQL xml partial: {e}"),
-                )
-            })?;
+            return Err(transition_log(
+                pair_id,
+                transition,
+                "sending",
+                to_status,
+                "thiếu file_id_1/2 khi fail pair đầy đủ",
+            ));
         }
     }
     Ok(())
@@ -1768,9 +1920,9 @@ mod tests {
             PairResolve::Ready { pair_id, .. } => pair_id,
             other => panic!("expected ready, got {other:?}"),
         };
-        // finish yêu cầu status=sending (sau claim).
-        assert!(claim_pair_for_send(&db, pair_id).unwrap());
-        finish_pair_success(&db, pair_id, "{}").unwrap();
+        let owner = "test-owner-1";
+        assert!(claim_pair_for_send(&db, pair_id, owner).unwrap());
+        finish_pair_success(&db, pair_id, "{}", owner).unwrap();
         match resolve_pair_for_measurement(&db, &m3).unwrap() {
             PairResolve::ExtraMeasurement { .. } => {}
             other => panic!("expected extra, got {other:?}"),
@@ -1804,10 +1956,52 @@ mod tests {
             PairResolve::Ready { pair_id, .. } => pair_id,
             other => panic!("{other:?}"),
         };
-        let first = claim_pair_for_send(&db, pair_id).unwrap();
-        let second = claim_pair_for_send(&db, pair_id).unwrap();
+        let owner = "test-owner-claim";
+        let first = claim_pair_for_send(&db, pair_id, owner).unwrap();
+        let second = claim_pair_for_send(&db, pair_id, "other-owner").unwrap();
         assert!(first);
         assert!(!second);
+    }
+
+    #[test]
+    fn live_lease_not_recovered_by_other_instance() {
+        let db = db::open_memory_for_test().unwrap();
+        let (a, b) = {
+            let conn = db.conn.lock().unwrap();
+            (
+                insert_waiting(&conn, "/tmp/live1", "2026-07-15 10:00:00"),
+                insert_waiting(&conn, "/tmp/live2", "2026-07-15 11:00:00"),
+            )
+        };
+        let m1 = meta(a, "HCMLIVE", 1, "2026-07-15 10:00:00", "lv1");
+        let m2 = meta(b, "HCMLIVE", 2, "2026-07-15 11:00:00", "lv2");
+        save_meta(&db, &m1);
+        save_meta(&db, &m2);
+        resolve_pair_for_measurement(&db, &m1).unwrap();
+        let pair_id = match resolve_pair_for_measurement(&db, &m2).unwrap() {
+            PairResolve::Ready { pair_id, .. } => pair_id,
+            other => panic!("{other:?}"),
+        };
+        assert!(claim_pair_for_send(&db, pair_id, "owner-a").unwrap());
+        // Lease còn hiệu lực → không recover.
+        assert_eq!(recover_expired_sending_pairs(&db).unwrap(), 0);
+        // Owner B không fail được pair của A.
+        assert!(fail_pair(&db, pair_id, "send_error", "nope", "owner-b").is_err());
+        // Owner A finish OK.
+        finish_pair_success(&db, pair_id, "{}", "owner-a").unwrap();
+        // processed không bị fail path ghi đè.
+        assert!(fail_pair(&db, pair_id, "send_error", "stale", "owner-a").is_err());
+        let status: String = {
+            let conn = db.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT status FROM measurement_pairs WHERE id = ?1",
+                params![pair_id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(status, "processed");
+        assert!(retryable_pairs(&db).unwrap().is_empty());
     }
 
     #[test]
@@ -1829,16 +2023,25 @@ mod tests {
             PairResolve::Ready { pair_id, .. } => pair_id,
             other => panic!("{other:?}"),
         };
-        assert!(claim_pair_for_send(&db, pair_id).unwrap());
-        // Simulate crash: still sending, not in retryable.
+        assert!(claim_pair_for_send(&db, pair_id, "owner-crash").unwrap());
+        // Simulate crash: still sending, not in retryable while lease live.
         assert!(retryable_pairs(&db).unwrap().is_empty());
-        let n = recover_orphaned_sending_pairs(&db).unwrap();
+        // Force lease hết hạn (legacy NULL hoặc quá khứ).
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE measurement_pairs SET sending_lease_until = datetime('now', '-1 seconds') WHERE id = ?1",
+                params![pair_id],
+            )
+            .unwrap();
+        }
+        let n = recover_expired_sending_pairs(&db).unwrap();
         assert_eq!(n, 1);
         assert_eq!(retryable_pairs(&db).unwrap(), vec![pair_id]);
         // Có thể claim lại và finish.
-        assert!(claim_pair_for_send(&db, pair_id).unwrap());
-        save_pair_request(&db, pair_id, 7, r#"{"ok":true}"#).unwrap();
-        finish_pair_success(&db, pair_id, "{}").unwrap();
+        assert!(claim_pair_for_send(&db, pair_id, "owner-retry").unwrap());
+        save_pair_request(&db, pair_id, 7, r#"{"ok":true}"#, "owner-retry").unwrap();
+        finish_pair_success(&db, pair_id, "{}", "owner-retry").unwrap();
     }
 
     #[test]
@@ -1917,9 +2120,10 @@ mod tests {
             PairResolve::Ready { pair_id, .. } => pair_id,
             other => panic!("{other:?}"),
         };
-        assert!(claim_pair_for_send(&db, pair_id).unwrap());
-        save_pair_request(&db, pair_id, 42, r#"{"kept":true}"#).unwrap();
-        fail_pair(&db, pair_id, "send_error", "HIS 500").unwrap();
+        let owner = "owner-retry-keep";
+        assert!(claim_pair_for_send(&db, pair_id, owner).unwrap());
+        save_pair_request(&db, pair_id, 42, r#"{"kept":true}"#, owner).unwrap();
+        fail_pair(&db, pair_id, "send_error", "HIS 500", owner).unwrap();
 
         let retries = retryable_pairs(&db).unwrap();
         assert_eq!(retries, vec![pair_id]);
@@ -1946,7 +2150,7 @@ mod tests {
             .unwrap()
         };
         assert_eq!(payload, r#"{"kept":true}"#);
-        assert!(claim_pair_for_send(&db, pair_id).unwrap());
+        assert!(claim_pair_for_send(&db, pair_id, "owner-retry-2").unwrap());
     }
 
     #[test]

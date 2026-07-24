@@ -2,11 +2,12 @@
 //! - Poll định kỳ + FS watcher (`notify`) phát hiện XML mới
 //! - Chỉ INSERT path chưa có trong DB
 //! - Emit event cho UI refresh theo khoảng ngày
-//! - Tự xử lý file `waiting` (auto process HIS) khi có file mới / còn chờ
+//! - Recovery pair `sending` hết lease + auto process waiting/retry pairs
 
 use crate::app_logger;
 use crate::db::AppDb;
 use crate::kr800_process::{self, Kr800ProcessState, ProcessResult};
+use crate::measurement_pair;
 use crate::settings;
 use crate::xml_track::{self, InsertedXmlFile, InsertNewResult};
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime};
@@ -68,6 +69,8 @@ pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(2)).await;
         app_logger::info("folder_watch", "background watcher started");
+        // Startup: recover lease hết hạn ngay cả khi không có XML waiting.
+        recover_and_process_pending_work(&app).await;
         run_loop(app).await;
     });
 }
@@ -117,7 +120,7 @@ async fn run_loop(app: AppHandle) {
                             pending_poll_ticks = pending_poll_ticks.saturating_add(1);
                             if pending_poll_ticks >= PENDING_PROCESS_EVERY_N_POLLS {
                                 pending_poll_ticks = 0;
-                                auto_process_pending_waiting(&app).await;
+                                recover_and_process_pending_work(&app).await;
                             }
                         }
                         Err(err) => {
@@ -330,14 +333,42 @@ async fn auto_process_after_insert(app: &AppHandle, inserted: &[InsertedXmlFile]
     run_auto_process(app, &from_time, &to_time).await;
 }
 
-/// Xử lý các file waiting còn lại trong ngày hôm nay (local).
-async fn auto_process_pending_waiting(app: &AppHandle) {
+/// Recovery lease hết hạn + (nếu auto-process bật) retry pair / waiting.
+///
+/// Không phụ thuộc XML `waiting`: pair `sending` orphan / `send_error` vẫn được xử lý.
+async fn recover_and_process_pending_work(app: &AppHandle) {
+    // 1) Luôn recover DB (kể cả auto-process tắt) — đưa về send_error, không PUT.
+    let recovered = {
+        let Some(db) = app.try_state::<AppDb>() else {
+            return;
+        };
+        match measurement_pair::recover_expired_sending_pairs(&db) {
+            Ok(n) => {
+                if n > 0 {
+                    app_logger::warn(
+                        "folder_watch",
+                        &format!("startup/poll recover_expired_sending: {n} pair(s)"),
+                    );
+                }
+                n
+            }
+            Err(err) => {
+                app_logger::error(
+                    "folder_watch",
+                    &format!("recover_expired_sending failed: {err}"),
+                );
+                0
+            }
+        }
+    };
+
     if !auto_process_enabled(app) {
         return;
     }
     if !his_ready(app) {
         return;
     }
+
     let (from_time, to_time) = today_range_local();
     let waiting = {
         let Some(db) = app.try_state::<AppDb>() else {
@@ -345,18 +376,41 @@ async fn auto_process_pending_waiting(app: &AppHandle) {
         };
         match xml_track::count_waiting_in_range(&db, DEVICE_KEY, &from_time, &to_time) {
             Ok(n) => n,
-            Err(_) => return,
+            Err(_) => 0,
         }
     };
-    if waiting == 0 {
+    let pair_work = {
+        let Some(db) = app.try_state::<AppDb>() else {
+            return;
+        };
+        match measurement_pair::count_pending_pair_work(&db) {
+            Ok(w) => w,
+            Err(err) => {
+                app_logger::error("folder_watch", &format!("count_pending_pair_work: {err}"));
+                return;
+            }
+        }
+    };
+
+    // Có waiting trong range, pair retryable, hoặc vừa recover → chạy pipeline.
+    // process_inner load retryable_pairs toàn cục (không chỉ theo ngày).
+    if waiting == 0 && pair_work.retryable == 0 && recovered == 0 {
         return;
     }
+
+    app_logger::info(
+        "folder_watch",
+        &format!(
+            "pending work waiting={waiting} retryable_pairs={} recovered_sending={recovered}",
+            pair_work.retryable
+        ),
+    );
     run_auto_process(app, &from_time, &to_time).await;
 }
 
-/// Gọi khi user bật toggle auto-process (có folder) — xử lý waiting ngay, không chờ poll.
+/// Gọi khi user bật toggle auto-process — recovery + pending work ngay.
 pub async fn trigger_auto_process_now(app: &AppHandle) {
-    auto_process_pending_waiting(app).await;
+    recover_and_process_pending_work(app).await;
 }
 
 fn auto_process_enabled(app: &AppHandle) -> bool {

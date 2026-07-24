@@ -26,7 +26,6 @@ const MAX_TRANSIENT_RETRIES: u32 = 3;
 const FILE_PROGRESS_EVENT: &str = "kr800:file-progress";
 const PATIENT_LIST_EVENT: &str = "kr800:patient-list-ready";
 
-#[derive(Default)]
 pub struct Kr800ProcessState {
     run_lock: Mutex<()>,
     token_lock: Mutex<()>,
@@ -36,6 +35,22 @@ pub struct Kr800ProcessState {
     /// Khoá theo content hash (dedup) và patient_code_norm (pair).
     hash_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     patient_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// ID process app — gắn DB lease khi claim pair.
+    pub instance_id: String,
+}
+
+impl Default for Kr800ProcessState {
+    fn default() -> Self {
+        Self {
+            run_lock: Mutex::new(()),
+            token_lock: Mutex::new(()),
+            patient_cache: Mutex::new(None),
+            last_patient_list: Mutex::new(None),
+            hash_locks: Mutex::new(HashMap::new()),
+            patient_locks: Mutex::new(HashMap::new()),
+            instance_id: measurement_pair::generate_instance_id(),
+        }
+    }
 }
 
 /// Snapshot response API người bệnh để UI xem JSON.
@@ -204,17 +219,17 @@ async fn process_inner(
     state.hash_locks.lock().await.clear();
     state.patient_locks.lock().await.clear();
 
-    // Dưới run_lock: mọi pair `sending` còn sót là orphan (crash giữa chừng) → send_error.
-    match measurement_pair::recover_orphaned_sending_pairs(db) {
+    // Dưới run_lock: reclaim pair `sending` **hết lease** (không đụng lease còn sống).
+    match measurement_pair::recover_expired_sending_pairs(db) {
         Ok(n) if n > 0 => {
             app_logger::warn(
                 "kr800",
-                &format!("recover_orphaned_sending: {n} pair(s) sending → send_error"),
+                &format!("recover_expired_sending: {n} pair(s) → send_error"),
             );
         }
         Ok(_) => {}
         Err(error) => {
-            app_logger::error("kr800", &format!("recover_orphaned_sending failed: {error}"));
+            app_logger::error("kr800", &format!("recover_expired_sending failed: {error}"));
             return Err(error);
         }
     }
@@ -484,7 +499,7 @@ async fn process_retry_pair(
     };
     let _patient_guard = patient_lock.lock().await;
 
-    match measurement_pair::claim_pair_for_send(db, pair_id) {
+    match measurement_pair::claim_pair_for_send(db, pair_id, &state.instance_id) {
         Ok(true) => {}
         Ok(false) => return FileOutcome::default(),
         Err(error) => {
@@ -493,7 +508,7 @@ async fn process_retry_pair(
                 &format!("pair_id={pair_id} claim_pair_for_send: {error}"),
             );
             // Cố gắng đưa pair ra khỏi trạng thái không nhất quán.
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error, &state.instance_id) {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail after claim err: {e}"));
             }
             return FileOutcome::default();
@@ -505,7 +520,7 @@ async fn process_retry_pair(
     let (payload, payload_json) = match resolve_payload_for_pair(db, catalog, &pair, id1, id2) {
         Ok(v) => v,
         Err(error) => {
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error) {
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error, &state.instance_id) {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
             }
             emit_pair_progress(app, db, pair_id);
@@ -520,7 +535,7 @@ async fn process_retry_pair(
         match match_treatment(patients, &pair.patient_code) {
             Ok(id) => id,
             Err((status, message)) => {
-                if let Err(e) = measurement_pair::fail_pair(db, pair_id, status, &message) {
+                if let Err(e) = measurement_pair::fail_pair(db, pair_id, status, &message, &state.instance_id) {
                     app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
                 }
                 emit_pair_progress(app, db, pair_id);
@@ -530,9 +545,9 @@ async fn process_retry_pair(
     };
 
     if let Err(error) =
-        measurement_pair::save_pair_request(db, pair_id, treatment_id, &payload_json)
+        measurement_pair::save_pair_request(db, pair_id, treatment_id, &payload_json, &state.instance_id)
     {
-        if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+        if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error, &state.instance_id) {
             app_logger::error("kr800", &format!("pair_id={pair_id} fail after save_request: {e}"));
         }
         emit_pair_progress(app, db, pair_id);
@@ -542,7 +557,7 @@ async fn process_retry_pair(
     match send_update(db, state, client, settings, treatment_id, &payload, &payload_json, pair_id)
         .await
     {
-        Ok(response) => match measurement_pair::finish_pair_success(db, pair_id, &response) {
+        Ok(response) => match measurement_pair::finish_pair_success(db, pair_id, &response, &state.instance_id) {
             Ok(()) => {
                 emit_pair_progress(app, db, pair_id);
                 app_logger::info(
@@ -566,7 +581,7 @@ async fn process_retry_pair(
                     ),
                 );
                 let msg = format!("HIS đã nhận nhưng ghi DB processed thất bại: {error}");
-                if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &msg) {
+                if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &msg, &state.instance_id) {
                     app_logger::error(
                         "kr800",
                         &format!("pair_id={pair_id} fail after finish error: {e}"),
@@ -577,7 +592,7 @@ async fn process_retry_pair(
             }
         },
         Err(error) => {
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error, &state.instance_id) {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair send: {e}"));
             }
             emit_pair_progress(app, db, pair_id);
@@ -599,7 +614,7 @@ async fn send_ready_pair(
     ordered: &OrderedPair,
 ) -> Result<FileOutcome, (&'static str, String)> {
     // Mọi lỗi sau claim phải fail_pair (cả pair + 2 XML), không return Err để fail_file 1 XML.
-    match measurement_pair::claim_pair_for_send(db, pair_id) {
+    match measurement_pair::claim_pair_for_send(db, pair_id, &state.instance_id) {
         Ok(true) => {}
         Ok(false) => return Ok(FileOutcome::default()),
         Err(error) => {
@@ -607,7 +622,7 @@ async fn send_ready_pair(
                 "kr800",
                 &format!("pair_id={pair_id} claim_pair_for_send: {error}"),
             );
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error, &state.instance_id) {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail after claim: {e}"));
             }
             emit_pair_progress(app, db, pair_id);
@@ -624,7 +639,7 @@ async fn send_ready_pair(
                 &format!("pair_id={pair_id} snapshot/load failed: {error}"),
             );
             // mapping_error: pair CHECK không có xml_error; integrity snapshot = lỗi mapping/gửi.
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error) {
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error, &state.instance_id) {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
             }
             emit_pair_progress(app, db, pair_id);
@@ -641,7 +656,7 @@ async fn send_ready_pair(
     ) {
         Ok(p) => p,
         Err(error) => {
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error) {
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &error, &state.instance_id) {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
             }
             emit_pair_progress(app, db, pair_id);
@@ -652,7 +667,7 @@ async fn send_ready_pair(
         Ok(j) => j,
         Err(error) => {
             let msg = format!("Serialize request thất bại: {error}");
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &msg) {
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "mapping_error", &msg, &state.instance_id) {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
             }
             emit_pair_progress(app, db, pair_id);
@@ -663,7 +678,7 @@ async fn send_ready_pair(
     let treatment_id = match match_treatment(patients, &ordered.first.patient_code) {
         Ok(id) => id,
         Err((status, message)) => {
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, status, &message) {
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, status, &message, &state.instance_id) {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
             }
             emit_pair_progress(app, db, pair_id);
@@ -671,9 +686,9 @@ async fn send_ready_pair(
         }
     };
     if let Err(error) =
-        measurement_pair::save_pair_request(db, pair_id, treatment_id, &payload_json)
+        measurement_pair::save_pair_request(db, pair_id, treatment_id, &payload_json, &state.instance_id)
     {
-        if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+        if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error, &state.instance_id) {
             app_logger::error("kr800", &format!("pair_id={pair_id} fail after save: {e}"));
         }
         emit_pair_progress(app, db, pair_id);
@@ -705,7 +720,7 @@ async fn send_ready_pair(
     )
     .await
     {
-        Ok(response) => match measurement_pair::finish_pair_success(db, pair_id, &response) {
+        Ok(response) => match measurement_pair::finish_pair_success(db, pair_id, &response, &state.instance_id) {
             Ok(()) => {
                 emit_pair_progress(app, db, pair_id);
                 app_logger::info(
@@ -730,7 +745,7 @@ async fn send_ready_pair(
                     ),
                 );
                 let msg = format!("HIS đã nhận nhưng ghi DB processed thất bại: {error}");
-                if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &msg) {
+                if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &msg, &state.instance_id) {
                     app_logger::error(
                         "kr800",
                         &format!("pair_id={pair_id} fail after finish error: {e}"),
@@ -741,7 +756,7 @@ async fn send_ready_pair(
             }
         },
         Err(error) => {
-            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error) {
+            if let Err(e) = measurement_pair::fail_pair(db, pair_id, "send_error", &error, &state.instance_id) {
                 app_logger::error("kr800", &format!("pair_id={pair_id} fail_pair: {e}"));
             }
             emit_pair_progress(app, db, pair_id);
@@ -1074,7 +1089,7 @@ async fn send_update(
     let mut auth_retried = false;
     let mut transient_retries = 0u32;
     loop {
-        measurement_pair::increment_pair_attempt(db, pair_id)?;
+        measurement_pair::increment_pair_attempt(db, pair_id, &state.instance_id)?;
         let response = client
             .put(&url)
             .bearer_auth(&token)
