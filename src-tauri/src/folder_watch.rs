@@ -25,8 +25,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(20);
 const FS_DEBOUNCE: Duration = Duration::from_millis(1500);
 /// File phải ổn định (mtime) trước khi index / process.
 const MIN_FILE_AGE: Duration = Duration::from_secs(2);
-/// Mỗi N tick poll (~60s) mới retry waiting còn sót (tránh spam HIS).
-const PENDING_PROCESS_EVERY_N_POLLS: u32 = 3;
+/// Recovery lease / retry pair — **độc lập** folder scan (không phụ thuộc Ok/Err scan).
+const RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
 
 const EVENT_INDEXED: &str = "kr800:files-indexed";
 const EVENT_AUTO_PROCESS: &str = "kr800:auto-process";
@@ -80,11 +80,15 @@ async fn run_loop(app: AppHandle) {
     // Giữ watcher sống trong scope (drop = ngừng watch). Prefix `_` tránh warning unused.
     let mut _fs_watcher: Option<RecommendedWatcher> = None;
     let (fs_tx, mut fs_rx) = mpsc::unbounded_channel::<PathBuf>();
-    let mut pending_poll_ticks: u32 = 0;
 
     let mut poll = tokio::time::interval(POLL_INTERVAL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     poll.tick().await;
+
+    // Timer recovery độc lập: không phụ thuộc folder / scan Ok|Err / waiting.
+    let mut recovery = tokio::time::interval(RECOVERY_INTERVAL);
+    recovery.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    recovery.tick().await; // consume immediate tick (startup đã recover)
 
     loop {
         tokio::select! {
@@ -110,19 +114,13 @@ async fn run_loop(app: AppHandle) {
                         );
                     }
 
+                    // Chỉ index file — recovery/retry không nằm trong nhánh này.
                     match insert_new_poll_blocking(&app).await {
                         Ok(insert) if insert.inserted_count > 0 => {
-                            pending_poll_ticks = 0;
                             emit_indexed(&app, "auto", &insert);
                             auto_process_after_insert(&app, &insert.inserted).await;
                         }
-                        Ok(_) => {
-                            pending_poll_ticks = pending_poll_ticks.saturating_add(1);
-                            if pending_poll_ticks >= PENDING_PROCESS_EVERY_N_POLLS {
-                                pending_poll_ticks = 0;
-                                recover_and_process_pending_work(&app).await;
-                            }
-                        }
+                        Ok(_) => {}
                         Err(err) => {
                             app_logger::error(
                                 "folder_watch",
@@ -133,14 +131,17 @@ async fn run_loop(app: AppHandle) {
                 } else if last_folder.is_some() {
                     last_folder = None;
                     _fs_watcher = None;
-                    pending_poll_ticks = 0;
                     emit_watch_status(
                         &app,
                         false,
                         None,
-                        "Chưa chọn thư mục tracking — tạm dừng theo dõi nền.",
+                        "Chưa chọn thư mục tracking — tạm dừng quét file (recovery pair vẫn chạy).",
                     );
                 }
+            }
+            _ = recovery.tick() => {
+                // Độc lập folder scan: chạy dù offline, không folder, scan lỗi.
+                recover_and_process_pending_work(&app).await;
             }
             Some(path) = fs_rx.recv() => {
                 let mut batch = vec![path];
@@ -151,7 +152,6 @@ async fn run_loop(app: AppHandle) {
                 }
                 match insert_paths_blocking(&app, batch).await {
                     Ok(insert) if insert.inserted_count > 0 => {
-                        pending_poll_ticks = 0;
                         emit_indexed(&app, "watcher", &insert);
                         auto_process_after_insert(&app, &insert.inserted).await;
                     }
@@ -335,9 +335,11 @@ async fn auto_process_after_insert(app: &AppHandle, inserted: &[InsertedXmlFile]
 
 /// Recovery lease hết hạn + (nếu auto-process bật) retry pair / waiting.
 ///
-/// Không phụ thuộc XML `waiting`: pair `sending` orphan / `send_error` vẫn được xử lý.
+/// - Recovery DB: **luôn** chạy (không folder, không HIS, auto tắt).
+/// - PUT pipeline: chỉ khi auto-process bật + HIS ready.
+/// - Không phụ thuộc XML `waiting` hay kết quả scan folder.
 async fn recover_and_process_pending_work(app: &AppHandle) {
-    // 1) Luôn recover DB (kể cả auto-process tắt) — đưa về send_error, không PUT.
+    // 1) Luôn recover DB (kể cả auto-process tắt / không folder) — chỉ send_error, không PUT.
     let recovered = {
         let Some(db) = app.try_state::<AppDb>() else {
             return;
@@ -347,7 +349,7 @@ async fn recover_and_process_pending_work(app: &AppHandle) {
                 if n > 0 {
                     app_logger::warn(
                         "folder_watch",
-                        &format!("startup/poll recover_expired_sending: {n} pair(s)"),
+                        &format!("recover_expired_sending: {n} pair(s) → send_error"),
                     );
                 }
                 n
@@ -392,8 +394,8 @@ async fn recover_and_process_pending_work(app: &AppHandle) {
         }
     };
 
-    // Có waiting trong range, pair retryable, hoặc vừa recover → chạy pipeline.
-    // process_inner load retryable_pairs toàn cục (không chỉ theo ngày).
+    // Có waiting, pair retryable, hoặc vừa recover → pipeline (run_lock chống double).
+    // process_inner load retryable_pairs toàn cục.
     if waiting == 0 && pair_work.retryable == 0 && recovered == 0 {
         return;
     }
