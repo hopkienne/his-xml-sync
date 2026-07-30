@@ -537,11 +537,11 @@ async fn send_measurement_file(
         };
         let dv_id = match pair.dv_kham_id.or(file.dv_kham_id) {
             Some(id) => id,
-            None => resolve_service_visit_id(db, state, client, settings, nb_id).await?,
+            None => resolve_service_visit_id(db, state, client, settings, nb_id, pair_id, file_id).await?,
         };
         measurement_pair::save_file_request(db, file_id, pair_id, nb_id, dv_id, &payload_json, &state.instance_id)?;
         app_logger::info("kr800", &format!("pair_id={pair_id} file_id={file_id} pair_order={} patient_code={} nb_dot_dieu_tri_id={nb_id} dv_kham_id={dv_id} endpoint={UPDATE_PATH}/{dv_id} payload_kind={payload_kind} attempt={}", file.pair_order, pair.patient_code, file.attempt_count + 1));
-        let response = send_file_update(db, state, client, settings, dv_id, &payload, file_id).await?;
+        let response = send_file_update(db, state, client, settings, dv_id, &payload, pair_id, file_id).await?;
         Ok::<String, String>(response)
     }.await;
     match result {
@@ -1321,7 +1321,13 @@ fn parse_service_visit_id(body: &str, expected_nb_id: i64) -> Result<i64, String
 }
 
 async fn resolve_service_visit_id(
-    db: &AppDb, state: &Kr800ProcessState, client: &Client, settings: &AppSettings, nb_id: i64,
+    db: &AppDb,
+    state: &Kr800ProcessState,
+    client: &Client,
+    settings: &AppSettings,
+    nb_id: i64,
+    pair_id: i64,
+    file_id: i64,
 ) -> Result<i64, String> {
     let url = his_api::join_url(&settings.his_api_url, TREATMENT_SUMMARY_PATH);
     let query = [
@@ -1333,9 +1339,14 @@ async fn resolve_service_visit_id(
     let mut retried_auth = false;
     loop {
         let response = client.get(&url).bearer_auth(&token).query(&query).send().await
-            .map_err(|e| format!("Gọi API dịch vụ khám thất bại: {e}"))?;
+            .map_err(|e| {
+                app_logger::error("kr800", &format!("pair_id={pair_id} file_id={file_id} nb_dot_dieu_tri_id={nb_id} endpoint={url} api=tong-hop request_error={e}"));
+                format!("Gọi API dịch vụ khám thất bại: {e}")
+            })?;
         let status = response.status();
         let body = response.text().await.map_err(|e| format!("Đọc response dịch vụ khám thất bại: {e}"))?;
+        let log = format!("pair_id={pair_id} file_id={file_id} nb_dot_dieu_tri_id={nb_id} endpoint={url} api=tong-hop response_status={status} response_body={}", response_log_body(&body));
+        if status.is_success() { app_logger::info("kr800", &log); } else { app_logger::error("kr800", &log); }
         if status.is_success() { return parse_service_visit_id(&body, nb_id); }
         if status == StatusCode::UNAUTHORIZED && !retried_auth {
             retried_auth = true;
@@ -1348,7 +1359,7 @@ async fn resolve_service_visit_id(
 
 async fn send_file_update(
     db: &AppDb, state: &Kr800ProcessState, client: &Client, settings: &AppSettings,
-    dv_kham_id: i64, payload: &HisPayload, file_id: i64,
+    dv_kham_id: i64, payload: &HisPayload, pair_id: i64, file_id: i64,
 ) -> Result<String, String> {
     let url = format!("{}/{}", his_api::join_url(&settings.his_api_url, UPDATE_PATH), dv_kham_id);
     let mut token = ensure_token(db, state).await?;
@@ -1360,13 +1371,18 @@ async fn send_file_update(
             Ok(response) => {
                 let status = response.status();
                 let body = response.text().await.map_err(|e| format!("Không đọc được response HIS: {e}"))?;
+                let log = format!("pair_id={pair_id} file_id={file_id} dv_kham_id={dv_kham_id} endpoint={url} api=nb-kham-ck-mat response_status={status} response_body={}", response_log_body(&body));
+                if status.is_success() { app_logger::info("kr800", &log); } else { app_logger::error("kr800", &log); }
                 if status.is_success() { return Ok(body); }
                 if status == StatusCode::UNAUTHORIZED && !auth_retried { auth_retried = true; token = refresh_token(db, state, &token).await?; continue; }
                 if is_transient(status) && transient_retries < MAX_TRANSIENT_RETRIES { sleep(Duration::from_secs(1 << transient_retries)).await; transient_retries += 1; continue; }
                 return Err(format!("HIS trả về {status}: {}", preview(&body)));
             }
             Err(error) if !error.is_builder() && transient_retries < MAX_TRANSIENT_RETRIES => { sleep(Duration::from_secs(1 << transient_retries)).await; transient_retries += 1; }
-            Err(error) => return Err(format!("Gửi HIS thất bại: {error}")),
+            Err(error) => {
+                app_logger::error("kr800", &format!("pair_id={pair_id} file_id={file_id} dv_kham_id={dv_kham_id} endpoint={url} api=nb-kham-ck-mat request_error={error}"));
+                return Err(format!("Gửi HIS thất bại: {error}"));
+            }
         }
     }
 }
@@ -1672,6 +1688,19 @@ fn is_transient(status: StatusCode) -> bool {
 
 fn preview(body: &str) -> String {
     body.chars().take(500).collect()
+}
+
+/// Response bodies are useful when reconciling HIS behavior with local state,
+/// but a bounded value protects the rotating application log from oversized
+/// error pages. `app_logger` still redacts token/password-shaped values.
+fn response_log_body(body: &str) -> String {
+    const MAX_RESPONSE_LOG_CHARS: usize = 16_000;
+    let value: String = body.chars().take(MAX_RESPONSE_LOG_CHARS).collect();
+    if body.chars().count() > MAX_RESPONSE_LOG_CHARS {
+        format!("{value}… [truncated]")
+    } else {
+        value
+    }
 }
 
 #[cfg(test)]
