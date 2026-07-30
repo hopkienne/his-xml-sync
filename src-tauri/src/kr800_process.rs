@@ -305,6 +305,9 @@ async fn process_inner(
             info_notes.push(msg.clone());
         }
     }
+    // This is an informational pair count, deliberately independent of the
+    // number of successful file PUTs.
+    let awaiting_pair = measurement_pair::count_open_pairs(db)?;
     let failed = files_failed_in_scope(db, from_time, to_time)?;
     let files = xml_track::list_xml_files(db, DEVICE_KEY, Some(from_time), Some(to_time))?;
 
@@ -499,9 +502,6 @@ async fn send_measurement_file(
         Ok(false) => return FileOutcome::default(),
         Err(error) => { app_logger::error("kr800", &format!("pair_id={pair_id} file_id={file_id} claim: {error}")); return FileOutcome::default(); }
     }
-    // This is an informational pair count, deliberately independent of the
-    // number of successful file PUTs.
-    let awaiting_pair = measurement_pair::count_open_pairs(db)?;
     emit_file_progress(app, db, file_id);
     let result = async {
         let file = measurement_pair::load_file_send_record(db, file_id)?.ok_or_else(|| "File vừa claim không tồn tại.".to_string())?;
