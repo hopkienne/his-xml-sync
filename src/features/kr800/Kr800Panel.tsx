@@ -9,7 +9,7 @@ import {
   SlidersHorizontal,
   Users,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getLastPatientList } from "../../lib/appCommands";
 import type {
   Kr800ScanProgressEvent,
@@ -102,6 +102,9 @@ export function Kr800Panel({
   /** Bật sau khi API danh sách người bệnh gọi thành công trong phiên app. */
   const [patientListReady, setPatientListReady] = useState(false);
   const [patientListMeta, setPatientListMeta] = useState<PatientListReadyEvent | null>(null);
+  // Keep the dialog prop stable: this panel receives frequent file-progress
+  // events while an auto-processing run is active.
+  const closePatientList = useCallback(() => setPatientsOpen(false), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -535,7 +538,7 @@ export function Kr800Panel({
         onClose={() => setParamsOpen(false)}
         processRange={processRange}
       />
-      <PatientListDialog open={patientsOpen} onClose={() => setPatientsOpen(false)} />
+      <PatientListDialog open={patientsOpen} onClose={closePatientList} />
     </section>
   );
 }

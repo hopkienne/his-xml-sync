@@ -1,5 +1,5 @@
 import { Check, Copy, Loader2, Users, X } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { getLastPatientList } from "../../lib/appCommands";
 import type { PatientListSnapshot } from "../../types";
 
@@ -10,7 +10,10 @@ type PatientListDialogProps = {
 
 type CopyState = "idle" | "copied" | "error";
 
-export function PatientListDialog({ open, onClose }: PatientListDialogProps) {
+export const PatientListDialog = memo(function PatientListDialog({
+  open,
+  onClose,
+}: PatientListDialogProps) {
   const titleId = useId();
   const [snapshot, setSnapshot] = useState<PatientListSnapshot | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -193,7 +196,7 @@ export function PatientListDialog({ open, onClose }: PatientListDialogProps) {
       </div>
     </div>
   );
-}
+});
 
 async function copyTextToClipboard(text: string): Promise<void> {
   if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
