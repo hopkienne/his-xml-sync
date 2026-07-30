@@ -344,7 +344,7 @@ async fn recover_and_process_pending_work(app: &AppHandle) {
         let Some(db) = app.try_state::<AppDb>() else {
             return;
         };
-        match measurement_pair::recover_expired_sending_pairs(&db) {
+        match measurement_pair::recover_expired_sending_files(&db) {
             Ok(n) => {
                 if n > 0 {
                     app_logger::warn(
@@ -381,12 +381,12 @@ async fn recover_and_process_pending_work(app: &AppHandle) {
             Err(_) => 0,
         }
     };
-    let pair_work = {
+    let retry_files = {
         let Some(db) = app.try_state::<AppDb>() else {
             return;
         };
-        match measurement_pair::count_pending_pair_work(&db) {
-            Ok(w) => w,
+        match measurement_pair::retryable_files(&db) {
+            Ok(files) => files.len(),
             Err(err) => {
                 app_logger::error("folder_watch", &format!("count_pending_pair_work: {err}"));
                 return;
@@ -396,7 +396,7 @@ async fn recover_and_process_pending_work(app: &AppHandle) {
 
     // Có waiting, pair retryable, hoặc vừa recover → pipeline (run_lock chống double).
     // process_inner load retryable_pairs toàn cục.
-    if waiting == 0 && pair_work.retryable == 0 && recovered == 0 {
+    if waiting == 0 && retry_files == 0 && recovered == 0 {
         return;
     }
 
@@ -404,7 +404,7 @@ async fn recover_and_process_pending_work(app: &AppHandle) {
         "folder_watch",
         &format!(
             "pending work waiting={waiting} retryable_pairs={} recovered_sending={recovered}",
-            pair_work.retryable
+            retry_files
         ),
     );
     run_auto_process(app, &from_time, &to_time).await;

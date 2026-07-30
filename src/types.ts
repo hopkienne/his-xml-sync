@@ -79,6 +79,7 @@ export type TrackedXmlStatus =
   | "processed"
   | "patient_not_found"
   | "treatment_ambiguous"
+  | "service_not_found"
   | "xml_error"
   | "mapping_error"
   | "send_error"

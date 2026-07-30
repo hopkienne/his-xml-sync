@@ -88,7 +88,8 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
                                  'waiting', 'processing', 'parsed', 'patient_matched', 'mapped',
                                  'sending', 'processed', 'patient_not_found', 'treatment_ambiguous',
                                  'xml_error', 'mapping_error', 'send_error', 'failed',
-                                 'awaiting_pair', 'pairing', 'pairing_error', 'extra_measurement'
+                                 'awaiting_pair', 'pairing', 'pairing_error', 'extra_measurement',
+                                 'service_not_found'
                                )),
           error_message      TEXT,
           content_hash       TEXT,
@@ -100,10 +101,14 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
           -- JSON snapshot đã parse (patient + R/L eyes + hash); nguồn payload PUT.
           measurement_snapshot TEXT,
           nb_dot_dieu_tri_id INTEGER,
+          dv_kham_id         INTEGER,
           request_payload    TEXT,
           response_payload   TEXT,
           processed_at       TEXT,
           attempt_count      INTEGER NOT NULL DEFAULT 0,
+          sending_started_at TEXT,
+          sending_owner_id   TEXT,
+          sending_lease_until TEXT,
           created_at         TEXT    NOT NULL,
           updated_at         TEXT    NOT NULL
         );
@@ -132,6 +137,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
                                  'treatment_ambiguous', 'mapping_error'
                                )),
           nb_dot_dieu_tri_id INTEGER,
+          dv_kham_id         INTEGER,
           request_payload    TEXT,
           response_payload   TEXT,
           error_message      TEXT,
@@ -178,6 +184,9 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     migrate_xml_files_measurement_snapshot(conn)?;
     migrate_measurement_pairs_sending_started_at(conn)?;
     migrate_measurement_pairs_sending_lease(conn)?;
+    migrate_measurement_pairs_dv_kham_id(conn)?;
+    migrate_xml_files_file_send_schema(conn)?;
+    normalize_legacy_pair_orders(conn)?;
 
     Ok(())
 }
@@ -568,6 +577,88 @@ fn migrate_measurement_pairs_sending_lease(conn: &Connection) -> Result<(), Stri
     Ok(())
 }
 
+/// The service visit ID is distinct from the treatment ID and must survive a
+/// restart so the second measurement never has to perform another lookup.
+fn migrate_measurement_pairs_dv_kham_id(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "measurement_pairs")?;
+    if columns.iter().any(|column| column == "dv_kham_id") {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE measurement_pairs ADD COLUMN dv_kham_id INTEGER;")
+        .map_err(|error| format!("Thêm dv_kham_id vào measurement_pairs thất bại: {error}"))
+}
+
+/// Move the send lease and request audit to individual XML files.  SQLite
+/// cannot alter a CHECK constraint, therefore this is a lossless rebuild when
+/// upgrading installations created by the pair-level sender.
+fn migrate_xml_files_file_send_schema(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "xml_files")?;
+    let schema: String = conn
+        .query_row("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'xml_files'", [], |row| row.get(0))
+        .map_err(|error| format!("Đọc schema xml_files thất bại: {error}"))?;
+    let required = ["dv_kham_id", "sending_started_at", "sending_owner_id", "sending_lease_until"];
+    if required.iter().all(|name| columns.iter().any(|column| column == name))
+        && schema.contains("service_not_found")
+    {
+        return Ok(());
+    }
+
+    let transaction = conn.unchecked_transaction()
+        .map_err(|error| format!("Bắt đầu migration file-send xml_files thất bại: {error}"))?;
+    transaction.execute_batch(r#"
+        DROP TABLE IF EXISTS xml_files_file_send_migrated;
+        CREATE TABLE xml_files_file_send_migrated (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, device_key TEXT NOT NULL DEFAULT 'kr-800',
+          file_name TEXT NOT NULL, file_path TEXT NOT NULL UNIQUE, file_size INTEGER,
+          file_modified_at TEXT,
+          status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN (
+            'waiting', 'processing', 'parsed', 'patient_matched', 'mapped', 'sending',
+            'processed', 'patient_not_found', 'treatment_ambiguous', 'xml_error',
+            'mapping_error', 'send_error', 'failed', 'awaiting_pair', 'pairing',
+            'pairing_error', 'extra_measurement', 'service_not_found'
+          )),
+          error_message TEXT, content_hash TEXT, patient_code TEXT, patient_no INTEGER,
+          measured_at TEXT, pair_id INTEGER, pair_order INTEGER, measurement_snapshot TEXT,
+          nb_dot_dieu_tri_id INTEGER, dv_kham_id INTEGER, request_payload TEXT,
+          response_payload TEXT, processed_at TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,
+          sending_started_at TEXT, sending_owner_id TEXT, sending_lease_until TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        INSERT INTO xml_files_file_send_migrated (
+          id, device_key, file_name, file_path, file_size, file_modified_at, status,
+          error_message, content_hash, patient_code, patient_no, measured_at, pair_id,
+          pair_order, measurement_snapshot, nb_dot_dieu_tri_id, request_payload,
+          response_payload, processed_at, attempt_count, created_at, updated_at
+        ) SELECT id, device_key, file_name, file_path, file_size, file_modified_at, status,
+          error_message, content_hash, patient_code, patient_no, measured_at, pair_id,
+          pair_order, measurement_snapshot, nb_dot_dieu_tri_id, request_payload,
+          response_payload, processed_at, attempt_count, created_at, updated_at
+          FROM xml_files;
+        DROP TABLE xml_files;
+        ALTER TABLE xml_files_file_send_migrated RENAME TO xml_files;
+        CREATE INDEX IF NOT EXISTS idx_xml_files_device_status ON xml_files (device_key, status);
+        CREATE INDEX IF NOT EXISTS idx_xml_files_device_created ON xml_files (device_key, created_at);
+        CREATE INDEX IF NOT EXISTS idx_xml_files_content_hash ON xml_files (content_hash, status);
+        CREATE INDEX IF NOT EXISTS idx_xml_files_patient_code ON xml_files (device_key, patient_code);
+        CREATE INDEX IF NOT EXISTS idx_xml_files_pair_id ON xml_files (pair_id);
+        CREATE INDEX IF NOT EXISTS idx_xml_files_send_lease ON xml_files (status, sending_lease_until);
+    "#).map_err(|error| format!("Rebuild file-send xml_files thất bại: {error}"))?;
+    transaction.commit().map_err(|error| format!("Commit migration file-send xml_files thất bại: {error}"))
+}
+
+/// Pre-file-send databases stored a one-file awaiting pair without an order.
+/// It is unambiguously the first measurement and becomes eligible for retry.
+fn normalize_legacy_pair_orders(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(r#"
+      UPDATE xml_files
+      SET pair_order=1, status=CASE WHEN status='processing' THEN 'awaiting_pair' ELSE status END,
+          updated_at=datetime('now')
+      WHERE pair_order IS NULL
+        AND pair_id IN (SELECT id FROM measurement_pairs WHERE file_id_1=xml_files.id);
+    "#).map_err(|e| format!("Chuẩn hóa pair_order legacy thất bại: {e}"))?;
+    Ok(())
+}
+
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
@@ -803,6 +894,10 @@ mod tests {
             "pair_id",
             "pair_order",
             "measurement_snapshot",
+            "dv_kham_id",
+            "sending_started_at",
+            "sending_owner_id",
+            "sending_lease_until",
         ] {
             assert!(
                 columns.iter().any(|column| column == expected),

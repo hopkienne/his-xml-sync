@@ -125,6 +125,7 @@ pub struct PairRecord {
     pub status: String,
     pub request_payload: Option<String>,
     pub nb_dot_dieu_tri_id: Option<i64>,
+    pub dv_kham_id: Option<i64>,
 }
 
 /// Kết quả resolve sau khi parse một XML mới.
@@ -548,7 +549,9 @@ pub fn resolve_pair_for_measurement(
     } else {
         // Chưa có cặp — tạo awaiting_pair với file hiện tại (chưa gán order 1/2).
         let pair_id = insert_awaiting_pair(&tx, meta)?;
-        attach_file_to_pair(&tx, meta.file_id, pair_id, None, "awaiting_pair")?;
+        // Arrival defines measurement #1.  It is intentionally never reordered
+        // after its PUT has completed.
+        attach_file_to_pair(&tx, meta.file_id, pair_id, Some(1), "awaiting_pair")?;
         tx.commit()
             .map_err(|e| format!("Commit awaiting_pair thất bại: {e}"))?;
         Ok(PairResolve::AwaitingSecond {
@@ -595,7 +598,12 @@ fn complete_pair_rows(tx: &Transaction<'_>, pair_id: i64, ordered: &OrderedPair)
         ));
     }
 
-    attach_file_to_pair(tx, ordered.first.file_id, pair_id, Some(1), "pairing")?;
+    // File #1 may already be processed (or waiting for retry); never overwrite
+    // its per-file outcome when file #2 arrives.
+    tx.execute(
+        "UPDATE xml_files SET pair_id=?1, pair_order=1, status=CASE WHEN status='awaiting_pair' THEN 'pairing' ELSE status END, updated_at=datetime('now') WHERE id=?2",
+        params![pair_id, ordered.first.file_id],
+    ).map_err(|e| format!("Giữ trạng thái file 1 khi ghép pair thất bại: {e}"))?;
     attach_file_to_pair(tx, ordered.second.file_id, pair_id, Some(2), "pairing")?;
     Ok(())
 }
@@ -742,7 +750,7 @@ fn find_open_pair(tx: &Transaction<'_>, patient_norm: &str) -> Result<Option<Pai
         SELECT id, patient_code, patient_code_norm,
                file_id_1, file_id_2, content_hash_1, content_hash_2,
                patient_no_1, patient_no_2, measured_at_1, measured_at_2,
-               status, request_payload, nb_dot_dieu_tri_id
+               status, request_payload, nb_dot_dieu_tri_id, dv_kham_id
         FROM measurement_pairs
         WHERE device_key = ?1
           AND patient_code_norm = ?2
@@ -767,7 +775,7 @@ pub fn load_pair_by_id(db: &AppDb, pair_id: i64) -> Result<Option<PairRecord>, S
         SELECT id, patient_code, patient_code_norm,
                file_id_1, file_id_2, content_hash_1, content_hash_2,
                patient_no_1, patient_no_2, measured_at_1, measured_at_2,
-               status, request_payload, nb_dot_dieu_tri_id
+               status, request_payload, nb_dot_dieu_tri_id, dv_kham_id
         FROM measurement_pairs WHERE id = ?1
         "#,
         params![pair_id],
@@ -809,6 +817,7 @@ fn map_pair_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PairRecord> {
         status: row.get(11)?,
         request_payload: row.get(12)?,
         nb_dot_dieu_tri_id: row.get(13)?,
+        dv_kham_id: row.get(14)?,
     })
 }
 
@@ -928,6 +937,154 @@ pub fn recover_expired_sending_pairs(db: &AppDb) -> Result<usize, String> {
 /// @deprecated alias — dùng `recover_expired_sending_pairs`.
 pub fn recover_orphaned_sending_pairs(db: &AppDb) -> Result<usize, String> {
     recover_expired_sending_pairs(db)
+}
+
+/// Per-file state used by the new sender.  The pair remains the shared cache
+/// and ordering record; the file is the unit that is leased, retried and
+/// audited.
+#[derive(Debug, Clone)]
+pub struct FileSendRecord {
+    pub id: i64,
+    pub pair_id: i64,
+    pub pair_order: u8,
+    pub status: String,
+    pub request_payload: Option<String>,
+    pub nb_dot_dieu_tri_id: Option<i64>,
+    pub dv_kham_id: Option<i64>,
+    pub attempt_count: u32,
+}
+
+pub fn load_file_send_record(db: &AppDb, file_id: i64) -> Result<Option<FileSendRecord>, String> {
+    let conn = lock_conn(db)?;
+    conn.query_row(
+        "SELECT id, pair_id, pair_order, status, request_payload, nb_dot_dieu_tri_id, dv_kham_id, attempt_count FROM xml_files WHERE id = ?1",
+        params![file_id],
+        |r| Ok(FileSendRecord { id: r.get(0)?, pair_id: r.get(1)?, pair_order: r.get::<_, i64>(2)? as u8,
+            status: r.get(3)?, request_payload: r.get(4)?, nb_dot_dieu_tri_id: r.get(5)?, dv_kham_id: r.get(6)?, attempt_count: r.get::<_, i64>(7)? as u32 }),
+    ).optional().map_err(|e| format!("Đọc file send id={file_id} thất bại: {e}"))
+}
+
+/// CAS claim.  File 2 is eligible only after the persisted first file is
+/// processed; therefore separate app instances cannot reverse the two PUTs.
+pub fn claim_file_for_send(db: &AppDb, file_id: i64, owner_id: &str) -> Result<bool, String> {
+    let mut conn = lock_conn(db)?;
+    let tx = conn.transaction().map_err(|e| format!("claim_file_send begin: {e}"))?;
+    let file = tx.query_row(
+        "SELECT pair_id, pair_order, status FROM xml_files WHERE id=?1", params![file_id],
+        |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, String>(2)?)),
+    ).optional().map_err(|e| format!("claim_file_send read: {e}"))?
+        .ok_or_else(|| format!("claim_file_send: không có file_id={file_id}"))?;
+    let (Some(pair_id), Some(order)) = (file.0, file.1) else { return Ok(false); };
+    if order == 2 {
+        let first_status: String = tx.query_row("SELECT status FROM xml_files WHERE pair_id=?1 AND pair_order=1", params![pair_id], |r| r.get(0))
+            .map_err(|e| format!("claim file 2 đọc file 1: {e}"))?;
+        if first_status != "processed" { tx.commit().map_err(|e| e.to_string())?; return Ok(false); }
+    }
+    let lease = format!("+{SENDING_LEASE_SECS} seconds");
+    let changed = tx.execute(r#"
+        UPDATE xml_files SET status='sending', error_message=NULL,
+          sending_started_at=datetime('now'), sending_owner_id=?2,
+          sending_lease_until=datetime('now', ?3), updated_at=datetime('now')
+        WHERE id=?1 AND status IN ('awaiting_pair','pairing','send_error','patient_not_found',
+          'treatment_ambiguous','mapping_error','service_not_found')
+    "#, params![file_id, owner_id, lease]).map_err(|e| format!("claim_file_send update: {e}"))?;
+    tx.commit().map_err(|e| format!("claim_file_send commit: {e}"))?;
+    Ok(changed == 1)
+}
+
+pub fn save_file_request(db: &AppDb, file_id: i64, pair_id: i64, nb_id: i64, dv_id: i64, payload: &str, owner_id: &str) -> Result<(), String> {
+    let mut conn = lock_conn(db)?;
+    let tx = conn.transaction().map_err(|e| format!("save_file_request begin: {e}"))?;
+    let file_changed = tx.execute(r#"
+        UPDATE xml_files SET nb_dot_dieu_tri_id=?1, dv_kham_id=?2, request_payload=?3, updated_at=datetime('now')
+        WHERE id=?4 AND pair_id=?5 AND status='sending' AND sending_owner_id=?6
+    "#, params![nb_id, dv_id, payload, file_id, pair_id, owner_id]).map_err(|e| format!("save_file_request file: {e}"))?;
+    if file_changed != 1 { return Err(format!("save_file_request lost lease for file_id={file_id}")); }
+    let pair_changed = tx.execute(r#"
+        UPDATE measurement_pairs SET nb_dot_dieu_tri_id=?1, dv_kham_id=?2, updated_at=datetime('now')
+        WHERE id=?3
+    "#, params![nb_id, dv_id, pair_id]).map_err(|e| format!("save_file_request pair: {e}"))?;
+    if pair_changed != 1 { return Err(format!("save_file_request missing pair_id={pair_id}")); }
+    tx.commit().map_err(|e| format!("save_file_request commit: {e}"))
+}
+
+pub fn increment_file_attempt(db: &AppDb, file_id: i64, owner_id: &str) -> Result<(), String> {
+    let conn = lock_conn(db)?;
+    let lease = format!("+{SENDING_LEASE_SECS} seconds");
+    let n = conn.execute(r#"
+        UPDATE xml_files SET attempt_count=attempt_count+1, sending_lease_until=datetime('now', ?2), updated_at=datetime('now')
+        WHERE id=?1 AND status='sending' AND sending_owner_id=?3
+    "#, params![file_id, lease, owner_id]).map_err(|e| format!("increment file attempt: {e}"))?;
+    if n == 1 { Ok(()) } else { Err(format!("increment file attempt lost lease file_id={file_id}")) }
+}
+
+pub fn finish_file_success(db: &AppDb, file_id: i64, response: &str, owner_id: &str) -> Result<(), String> {
+    let mut conn = lock_conn(db)?;
+    let tx = conn.transaction().map_err(|e| format!("finish_file begin: {e}"))?;
+    let pair_id: i64 = tx.query_row("SELECT pair_id FROM xml_files WHERE id=?1", params![file_id], |r| r.get(0))
+        .map_err(|e| format!("finish_file read pair: {e}"))?;
+    let n = tx.execute(r#"
+        UPDATE xml_files SET status='processed', error_message=NULL, response_payload=?1,
+          processed_at=datetime('now'), sending_started_at=NULL, sending_owner_id=NULL,
+          sending_lease_until=NULL, updated_at=datetime('now')
+        WHERE id=?2 AND status='sending' AND sending_owner_id=?3
+    "#, params![response, file_id, owner_id]).map_err(|e| format!("finish_file update: {e}"))?;
+    if n != 1 { return Err(format!("finish_file lost lease file_id={file_id}")); }
+    let second_exists: i64 = tx.query_row("SELECT COUNT(*) FROM xml_files WHERE pair_id=?1 AND pair_order=2", params![pair_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let all_done: i64 = tx.query_row("SELECT COUNT(*) FROM xml_files WHERE pair_id=?1 AND pair_order IN (1,2) AND status='processed'", params![pair_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let status = if second_exists == 1 && all_done == 2 { "processed" } else if second_exists == 1 { "pairing" } else { "awaiting_pair" };
+    tx.execute("UPDATE measurement_pairs SET status=?1, error_message=NULL, processed_at=CASE WHEN ?1='processed' THEN datetime('now') ELSE processed_at END, updated_at=datetime('now') WHERE id=?2", params![status, pair_id])
+        .map_err(|e| format!("finish_file pair: {e}"))?;
+    tx.commit().map_err(|e| format!("finish_file commit: {e}"))
+}
+
+pub fn fail_file_send(db: &AppDb, file_id: i64, status: &str, message: &str, owner_id: &str) -> Result<(), String> {
+    if !matches!(status, "send_error" | "mapping_error" | "patient_not_found" | "treatment_ambiguous" | "service_not_found") {
+        return Err(format!("Trạng thái retry file không hợp lệ: {status}"));
+    }
+    let conn = lock_conn(db)?;
+    let n = conn.execute(r#"
+        UPDATE xml_files SET status=?1, error_message=?2, sending_started_at=NULL,
+          sending_owner_id=NULL, sending_lease_until=NULL, updated_at=datetime('now')
+        WHERE id=?3 AND status='sending' AND sending_owner_id=?4
+    "#, params![status, message, file_id, owner_id]).map_err(|e| format!("fail_file_send: {e}"))?;
+    if n == 1 { Ok(()) } else { Err(format!("fail_file_send lost lease file_id={file_id}")) }
+}
+
+pub fn recover_expired_sending_files(db: &AppDb) -> Result<usize, String> {
+    let conn = lock_conn(db)?;
+    conn.execute(r#"
+      UPDATE xml_files SET status='send_error', error_message='Phục hồi file sending hết lease (crash/orphan) — sẽ retry cùng payload.',
+        sending_started_at=NULL, sending_owner_id=NULL, sending_lease_until=NULL, updated_at=datetime('now')
+      WHERE device_key=?1 AND status='sending' AND (sending_lease_until IS NULL OR sending_lease_until <= datetime('now'))
+    "#, params![DEVICE_KEY]).map_err(|e| format!("recover expired file sends: {e}"))
+      .map(|n| n as usize)
+}
+
+/// Includes old awaiting pairs with only file #1 and never filters by current
+/// day, so recovery works after midnight and while the folder is unavailable.
+pub fn retryable_files(db: &AppDb) -> Result<Vec<i64>, String> {
+    let conn = lock_conn(db)?;
+    let mut stmt = conn.prepare(r#"
+      SELECT f.id FROM xml_files f
+      WHERE f.device_key=?1
+        AND f.status IN ('awaiting_pair','pairing','send_error','patient_not_found','treatment_ambiguous','mapping_error','service_not_found')
+        AND f.pair_id IS NOT NULL AND f.pair_order IN (1,2)
+        AND (f.pair_order=1 OR EXISTS (SELECT 1 FROM xml_files first WHERE first.pair_id=f.pair_id AND first.pair_order=1 AND first.status='processed'))
+      ORDER BY f.pair_id, f.pair_order
+    "#).map_err(|e| format!("retryable files prepare: {e}"))?;
+    let rows = stmt.query_map(params![DEVICE_KEY], |r| r.get::<_, i64>(0)).map_err(|e| format!("retryable files query: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("retryable files row: {e}"))
+}
+
+/// Informational counter: an open pair is not an outcome mutually exclusive
+/// with a successfully processed first file.
+pub fn count_open_pairs(db: &AppDb) -> Result<usize, String> {
+    let conn = lock_conn(db)?;
+    conn.query_row(
+        "SELECT COUNT(*) FROM measurement_pairs WHERE device_key=?1 AND status IN ('awaiting_pair','pairing','send_error','patient_not_found','treatment_ambiguous','mapping_error')",
+        params![DEVICE_KEY], |r| r.get::<_, i64>(0),
+    ).map(|n| n as usize).map_err(|e| format!("Đếm pair đang mở: {e}"))
 }
 
 /// Claim cặp để gửi HIS — CAS status + gắn owner/lease.
@@ -2178,5 +2335,49 @@ mod tests {
             }
             other => panic!("expected ready after restart, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn file_send_keeps_pair_open_then_reuses_cached_service_for_second_file() {
+        let db = db::open_memory_for_test().unwrap();
+        let (first_id, second_id) = {
+            let conn = db.conn.lock().unwrap();
+            (insert_waiting(&conn, "/tmp/new-first", "2026-07-15 10:00:00"), insert_waiting(&conn, "/tmp/new-second", "2026-07-15 11:00:00"))
+        };
+        let first = meta(first_id, "HCMNEW", 1, "2026-07-15 10:00:00", "new1");
+        let second = meta(second_id, "HCMNEW", 2, "2026-07-15 11:00:00", "new2");
+        save_meta(&db, &first);
+        save_meta(&db, &second);
+        let pair_id = match resolve_pair_for_measurement(&db, &first).unwrap() {
+            PairResolve::AwaitingSecond { pair_id, .. } => pair_id,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert!(claim_file_for_send(&db, first_id, "owner-1").unwrap());
+        save_file_request(&db, first_id, pair_id, 1103, 3462, r#"{"first":true}"#, "owner-1").unwrap();
+        finish_file_success(&db, first_id, "{}", "owner-1").unwrap();
+        assert_eq!(load_pair_by_id(&db, pair_id).unwrap().unwrap().status, "awaiting_pair");
+        assert_eq!(load_pair_by_id(&db, pair_id).unwrap().unwrap().dv_kham_id, Some(3462));
+        let ready = resolve_pair_for_measurement(&db, &second).unwrap();
+        assert!(matches!(ready, PairResolve::Ready { .. }));
+        assert!(claim_file_for_send(&db, second_id, "owner-2").unwrap());
+        let second_record = load_file_send_record(&db, second_id).unwrap().unwrap();
+        assert_eq!(second_record.dv_kham_id, None, "cache remains on pair until request is persisted");
+        save_file_request(&db, second_id, pair_id, 1103, 3462, r#"{"second":true}"#, "owner-2").unwrap();
+        finish_file_success(&db, second_id, "{}", "owner-2").unwrap();
+        assert_eq!(load_pair_by_id(&db, pair_id).unwrap().unwrap().status, "processed");
+    }
+
+    #[test]
+    fn live_file_lease_blocks_second_claim_and_expired_lease_recovers() {
+        let db = db::open_memory_for_test().unwrap();
+        let id = { let conn = db.conn.lock().unwrap(); insert_waiting(&conn, "/tmp/lease-file", "2026-07-15 10:00:00") };
+        let m = meta(id, "HCMLEASEFILE", 1, "2026-07-15 10:00:00", "lease-file");
+        save_meta(&db, &m);
+        resolve_pair_for_measurement(&db, &m).unwrap();
+        assert!(claim_file_for_send(&db, id, "owner-a").unwrap());
+        assert!(!claim_file_for_send(&db, id, "owner-b").unwrap());
+        { let conn = db.conn.lock().unwrap(); conn.execute("UPDATE xml_files SET sending_lease_until=datetime('now','-1 seconds') WHERE id=?1", params![id]).unwrap(); }
+        assert_eq!(recover_expired_sending_files(&db).unwrap(), 1);
+        assert!(claim_file_for_send(&db, id, "owner-b").unwrap());
     }
 }
