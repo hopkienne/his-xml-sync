@@ -6,7 +6,7 @@ use crate::{
     xml_track::{DeviceFolderState, ScanProgress, TrackedXmlFile, XmlFileStatus},
 };
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime};
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use roxmltree::Document;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -283,27 +283,27 @@ pub fn index_path(db: &AppDb, path: &Path, min_age: Duration) -> Result<IndexOut
     let payload = serde_json::to_string(&parsed.payload).map_err(|e| e.to_string())?;
     let status = if parsed.payload.as_object().map(|value| value.is_empty()).unwrap_or(true) { "no_supported_data" } else { "waiting" };
     let path_text = path.to_string_lossy().to_string();
-    if content_hash_seen(db, &hash)? {
+    let mut conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
+    let tx = conn.transaction().map_err(|e| format!("Mở transaction HDR-9000: {e}"))?;
+    let reserved = tx.execute(
+        "INSERT OR IGNORE INTO hdr9000_content_hashes(device_key,content_hash,created_at) VALUES(?1,?2,datetime('now'))",
+        params![DEVICE_KEY, hash],
+    ).map_err(|e| format!("Đặt chỗ hash HDR-9000: {e}"))?;
+    if reserved == 0 {
+        tx.rollback().map_err(|e| format!("Hủy transaction hash HDR-9000: {e}"))?;
         app_logger::info("hdr9000", &format!("duplicate file={file_name} model=HDR-9000 hash={}", &hash[..12]));
         return Ok(IndexOutcome::Duplicate);
     }
-    let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
-    let affected = conn.execute("INSERT OR IGNORE INTO hdr9000_revisions(device_key,file_name,file_path,content_hash,ma_ho_so,patient_id,filter_date,date_source,source_time,snapshot_xml,snapshot_payload,status,discovered_at,created_at,updated_at,file_size,file_modified_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,datetime('now'),datetime('now'),datetime('now'),?13,?14)",
+    tx.execute("INSERT INTO hdr9000_revisions(device_key,file_name,file_path,content_hash,ma_ho_so,patient_id,filter_date,date_source,source_time,snapshot_xml,snapshot_payload,status,discovered_at,created_at,updated_at,file_size,file_modified_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,datetime('now'),datetime('now'),datetime('now'),?13,?14)",
         params![DEVICE_KEY, file_name, path_text, hash, parsed.ma_ho_so, parsed.patient_id, dates.filter_date, dates.date_source, dates.source_time, bytes, payload, status, metadata.len() as i64, metadata.modified().ok().and_then(system_time_to_local)])
         .map_err(|e| format!("Lưu revision HDR-9000: {e}"))?;
-    if affected == 0 { return Ok(IndexOutcome::Duplicate); }
+    let revision_id: i64 = tx.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))
+        .map_err(|e| format!("Đọc revision HDR-9000 vừa lưu: {e}"))?;
+    tx.execute("UPDATE hdr9000_content_hashes SET first_revision_id=?1 WHERE device_key=?2 AND content_hash=?3", params![revision_id, DEVICE_KEY, hash])
+        .map_err(|e| format!("Cập nhật hash HDR-9000: {e}"))?;
+    tx.commit().map_err(|e| format!("Lưu transaction HDR-9000: {e}"))?;
     app_logger::info("hdr9000", &format!("indexed model=HDR-9000 file={} maHoSo={} patientId={:?} hash={} source_time={} date_source={}", file_name, parsed.ma_ho_so, parsed.patient_id, &hash[..12], dates.source_time, dates.date_source));
     Ok(IndexOutcome::Inserted)
-}
-
-fn content_hash_seen(db: &AppDb, hash: &str) -> Result<bool, String> {
-    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM hdr9000_revisions WHERE device_key=?1 AND content_hash=?2)",
-            params![DEVICE_KEY, hash],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("Kiểm tra hash HDR-9000: {e}"))
 }
 
 pub fn list_files(db: &AppDb, from: Option<&str>, to: Option<&str>) -> Result<Vec<TrackedXmlFile>, String> {
@@ -344,6 +344,10 @@ pub async fn trigger_auto_process_now(app: &AppHandle) {
 
 async fn background_tick(app: &AppHandle) {
     let Some(db) = app.try_state::<AppDb>() else { return; };
+    if let Err(error) = recover_expired(&db) {
+        app_logger::error("hdr9000", &format!("Không khôi phục lease HDR-9000 hết hạn: {error}"));
+        return;
+    }
     let state = match folder_state(&db) { Ok(state) => state, Err(error) => { app_logger::error("hdr9000", &error); return; } };
     let Some(folder) = state.tracking_folder else {
         let _ = app.emit("hdr9000:watch-status", serde_json::json!({"active":false,"trackingFolder":null,"message":"Chưa chọn thư mục tracking HDR-9000."}));
@@ -372,6 +376,10 @@ async fn background_tick(app: &AppHandle) {
 
 pub async fn process(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState, from: &str, to: &str) -> Result<Hdr9000ProcessResult, String> {
     let _guard = state.run_lock.lock().await;
+    process_locked(app, db, state, from, to).await
+}
+
+async fn process_locked(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState, from: &str, to: &str) -> Result<Hdr9000ProcessResult, String> {
     recover_expired(db)?;
     let settings = settings::load(db)?;
     if settings.his_api_url.trim().is_empty() || settings.username.trim().is_empty() {
@@ -389,10 +397,7 @@ pub async fn process(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState, f
             Ok(ProcessOne::Skipped) => skipped += 1,
             Err(error) => {
                 failed += 1;
-                let status = if error.starts_with("patient_not_found:") { "patient_not_found" }
-                    else if error.starts_with("service_not_found:") { "service_not_found" }
-                    else if error.starts_with("xml_error:") { "xml_error" } else { "send_error" };
-                let _ = fail(db, id, status, &error, &state.instance_id);
+                let _ = fail(db, id, status_for_error(&error), &error, &state.instance_id);
                 emit_file(app, db, id);
                 app_logger::error("hdr9000", &format!("revision_id={id} {error}"));
             }
@@ -409,9 +414,8 @@ fn pending_range(db: &AppDb) -> Result<Option<(String, String)>, String> {
 }
 
 pub async fn try_process(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState, from: &str, to: &str) -> Result<Option<Hdr9000ProcessResult>, String> {
-    let guard = match state.run_lock.try_lock() { Ok(guard) => guard, Err(_) => return Ok(None) };
-    drop(guard);
-    process(app, db, state, from, to).await.map(Some)
+    let _guard = match state.run_lock.try_lock() { Ok(guard) => guard, Err(_) => return Ok(None) };
+    process_locked(app, db, state, from, to).await.map(Some)
 }
 
 enum ProcessOne { Processed, Skipped }
@@ -427,30 +431,58 @@ async fn process_one(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState, c
         Arc::clone(locks.entry(revision.ma_ho_so.clone()).or_insert_with(|| Arc::new(Mutex::new(()))))
     };
     let _patient = lock.lock().await;
-    let payload = stale_filtered_payload(db, &revision)?;
-    if payload.as_object().map(|value| value.is_empty()).unwrap_or(true) {
-        set_status(db, id, "superseded", None, &state.instance_id)?;
+    if !claim_patient_lease(db, &revision.ma_ho_so, &state.instance_id)? {
+        release_claim(db, id, &state.instance_id)?;
+        app_logger::info("hdr9000", &format!("revision_id={id} maHoSo={} đang được instance khác xử lý", revision.ma_ho_so));
         emit_file(app, db, id);
         return Ok(ProcessOne::Skipped);
     }
-    let dv_kham_id = resolve_service_id(db, state, client, settings, &revision.ma_ho_so).await?;
-    let body = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-    save_request(db, id, dv_kham_id, &body, &state.instance_id)?;
-    let response = match send_update(db, state, client, settings, dv_kham_id, &payload, id).await {
-        Ok(response) => response,
-        Err(error) => {
-            if is_invalid_service(&error) {
-                clear_service_cache(db, &revision.ma_ho_so)?;
-                let fresh_id = resolve_service_id(db, state, client, settings, &revision.ma_ho_so).await?;
-                save_request(db, id, fresh_id, &body, &state.instance_id)?;
-                send_update(db, state, client, settings, fresh_id, &payload, id).await?
-            } else { return Err(error); }
+
+    let result = async {
+        let payload = stale_filtered_payload(db, &revision)?;
+        if payload.as_object().map(|value| value.is_empty()).unwrap_or(true) {
+            set_status(db, id, "superseded", None, &state.instance_id)?;
+            emit_file(app, db, id);
+            Ok(ProcessOne::Skipped)
+        } else {
+            let dv_kham_id = resolve_service_id(db, state, client, settings, &revision.ma_ho_so).await?;
+            let body = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+            save_request(db, id, dv_kham_id, &body, &state.instance_id)?;
+            let response = match send_update(db, state, client, settings, dv_kham_id, &payload, id).await {
+                Ok(response) => Ok(response),
+                Err(error) if is_invalid_service(&error) => {
+                    clear_service_cache(db, &revision.ma_ho_so)?;
+                    let fresh_id = resolve_service_id(db, state, client, settings, &revision.ma_ho_so).await?;
+                    save_request(db, id, fresh_id, &body, &state.instance_id)?;
+                    send_update(db, state, client, settings, fresh_id, &payload, id).await
+                }
+                Err(error) => Err(error),
+            }?;
+            finish_success(db, &revision, &body, &response, &state.instance_id)?;
+            let _ = parsed;
+            emit_file(app, db, id);
+            Ok(ProcessOne::Processed)
         }
-    };
-    finish_success(db, &revision, &body, &response, &state.instance_id)?;
-    let _ = parsed;
-    emit_file(app, db, id);
-    Ok(ProcessOne::Processed)
+    }.await;
+
+    // Lưu trạng thái revision trước khi nhả khóa liên tiến trình, tránh một
+    // instance khác gửi revision cùng hồ sơ trong khoảng rất ngắn khi vừa lỗi.
+    if let Err(error) = &result {
+        if let Err(fail_error) = fail(db, id, status_for_error(error), error, &state.instance_id) {
+            app_logger::error("hdr9000", &format!("Không lưu lỗi revision_id={id} trước khi nhả lease: {fail_error}"));
+        }
+    }
+    if let Err(error) = release_patient_lease(db, &revision.ma_ho_so, &state.instance_id) {
+        app_logger::error("hdr9000", &format!("Không nhả lease maHoSo={} revision_id={id}: {error}", revision.ma_ho_so));
+    }
+    result
+}
+
+fn status_for_error(error: &str) -> &'static str {
+    if error.starts_with("patient_not_found:") { "patient_not_found" }
+    else if error.starts_with("service_not_found:") { "service_not_found" }
+    else if error.starts_with("xml_error:") { "xml_error" }
+    else { "send_error" }
 }
 
 struct Revision { id: i64, file_name: String, ma_ho_so: String, source_time: String, snapshot_payload: String, xml: Vec<u8> }
@@ -473,6 +505,29 @@ fn claim(db: &AppDb, id: i64, owner: &str) -> Result<bool, String> {
         "UPDATE hdr9000_revisions SET status='processing',error_message=NULL,sending_started_at=datetime('now'),sending_owner_id=?1,sending_lease_until=datetime('now','+120 seconds'),updated_at=datetime('now') WHERE id=?2 AND device_key=?3 AND status IN ('waiting','send_error','patient_not_found','service_not_found')",
         params![owner, id, DEVICE_KEY]).map_err(|e| e.to_string())?;
     Ok(changed == 1)
+}
+
+fn release_claim(db: &AppDb, id: i64, owner: &str) -> Result<(), String> {
+    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
+        "UPDATE hdr9000_revisions SET status='waiting',error_message=NULL,sending_started_at=NULL,sending_owner_id=NULL,sending_lease_until=NULL,updated_at=datetime('now') WHERE id=?1 AND device_key=?2 AND status='processing' AND sending_owner_id=?3",
+        params![id, DEVICE_KEY, owner],
+    ).map(|_| ()).map_err(|e| e.to_string())
+}
+
+fn claim_patient_lease(db: &AppDb, ma_ho_so: &str, owner: &str) -> Result<bool, String> {
+    let lease_modifier = format!("+{LEASE_SECONDS} seconds");
+    let changed = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
+        "INSERT INTO hdr9000_patient_leases(device_key,ma_ho_so,owner_id,lease_until,updated_at) VALUES(?1,?2,?3,datetime('now',?4),datetime('now')) ON CONFLICT(device_key,ma_ho_so) DO UPDATE SET owner_id=excluded.owner_id,lease_until=excluded.lease_until,updated_at=excluded.updated_at WHERE hdr9000_patient_leases.lease_until <= datetime('now') OR hdr9000_patient_leases.owner_id=excluded.owner_id",
+        params![DEVICE_KEY, ma_ho_so, owner, lease_modifier],
+    ).map_err(|e| format!("Đặt lease maHoSo HDR-9000: {e}"))?;
+    Ok(changed == 1)
+}
+
+fn release_patient_lease(db: &AppDb, ma_ho_so: &str, owner: &str) -> Result<(), String> {
+    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
+        "DELETE FROM hdr9000_patient_leases WHERE device_key=?1 AND ma_ho_so=?2 AND owner_id=?3",
+        params![DEVICE_KEY, ma_ho_so, owner],
+    ).map(|_| ()).map_err(|e| format!("Nhả lease maHoSo HDR-9000: {e}"))
 }
 
 fn save_request(db: &AppDb, id: i64, dv_kham_id: i64, body: &str, owner: &str) -> Result<(), String> {
@@ -561,19 +616,32 @@ async fn resolve_service_id(db: &AppDb, state: &Hdr9000ProcessState, client: &Cl
         .query_row("SELECT dv_kham_id FROM hdr9000_service_cache WHERE device_key=?1 AND ma_ho_so=?2", params![DEVICE_KEY, ma_ho_so], |row| row.get(0)).optional().map_err(|e| e.to_string())? { return Ok(id); }
     let auth = token(db, state).await?;
     let patient_url = his_api::join_url(&settings.his_api_url, PATIENT_PATH);
-    let patient_body = client.get(&patient_url).bearer_auth(&auth).query(&[("maHoSo", ma_ho_so), ("page", "0"), ("size", "50")]).send().await
-        .map_err(|e| format!("patient_not_found: Gọi API người bệnh thất bại: {e}"))?.text().await.map_err(|e| e.to_string())?;
+    let patient_response = client.get(&patient_url).bearer_auth(&auth).query(&[("maHoSo", ma_ho_so), ("page", "0"), ("size", "50")]).send().await
+        .map_err(|e| format!("send_error: Gọi API người bệnh thất bại: {e}"))?;
+    let patient_body = read_success_body(patient_response, "API người bệnh").await?;
     let patients: Value = serde_json::from_str(&patient_body).map_err(|e| format!("patient_not_found: Response người bệnh không hợp lệ: {e}"))?;
     let nb_id = patients.pointer("/data").and_then(Value::as_array).and_then(|rows| rows.iter().find(|row| row.get("maHoSo").and_then(Value::as_str).map(|value| value.trim().eq_ignore_ascii_case(ma_ho_so)).unwrap_or(false)))
         .and_then(|row| row.get("nbDotDieuTriId")).and_then(Value::as_i64).ok_or_else(|| "patient_not_found: Không tìm thấy hồ sơ hoặc đợt điều trị.".to_string())?;
     let summary_url = his_api::join_url(&settings.his_api_url, SUMMARY_PATH);
-    let body = client.get(&summary_url).bearer_auth(&auth).query(&[("nbThongTinId", nb_id.to_string()), ("page", "0".into()), ("size", "500".into()), ("active", "true".into()), ("dsCoSoKcbId", settings.ds_co_so_kcb_id.to_string())]).send().await
-        .map_err(|e| format!("service_not_found: Gọi tổng hợp đợt điều trị thất bại: {e}"))?.text().await.map_err(|e| e.to_string())?;
+    let summary_response = client.get(&summary_url).bearer_auth(&auth).query(&[("nbThongTinId", nb_id.to_string()), ("page", "0".into()), ("size", "500".into()), ("active", "true".into()), ("dsCoSoKcbId", settings.ds_co_so_kcb_id.to_string())]).send().await
+        .map_err(|e| format!("send_error: Gọi tổng hợp đợt điều trị thất bại: {e}"))?;
+    let body = read_success_body(summary_response, "API tổng hợp đợt điều trị").await?;
     let summary: Value = serde_json::from_str(&body).map_err(|e| format!("service_not_found: Response tổng hợp không hợp lệ: {e}"))?;
     let id = summary.pointer("/data/dsDvKham").and_then(Value::as_array).and_then(|rows| rows.first()).and_then(|row| row.get("id")).and_then(Value::as_i64)
         .ok_or_else(|| "service_not_found: dsDvKham rỗng.".to_string())?;
     db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute("INSERT INTO hdr9000_service_cache(device_key,ma_ho_so,dv_kham_id,updated_at) VALUES(?1,?2,?3,datetime('now')) ON CONFLICT DO UPDATE SET dv_kham_id=excluded.dv_kham_id,updated_at=excluded.updated_at", params![DEVICE_KEY, ma_ho_so, id]).map_err(|e| e.to_string())?;
     Ok(id)
+}
+
+async fn read_success_body(response: reqwest::Response, endpoint: &str) -> Result<String, String> {
+    let status = response.status();
+    let body = response.text().await.map_err(|e| format!("send_error: Đọc response {endpoint}: {e}"))?;
+    if status.is_success() {
+        return Ok(body);
+    }
+    let preview: String = body.chars().take(500).collect();
+    app_logger::error("hdr9000", &format!("{endpoint} trả về HTTP {status}: {preview}"));
+    Err(format!("send_error: {endpoint} trả về {status}: {preview}"))
 }
 
 fn clear_service_cache(db: &AppDb, ma_ho_so: &str) -> Result<(), String> {
@@ -674,9 +742,16 @@ mod tests {
     #[test]
     fn same_hash_at_another_path_is_not_eligible_for_a_second_send() {
         let db = open_memory_for_test().unwrap();
-        test_revision(&db, 1, "same-content", "2026-07-28 09:00:00", "{}");
-        assert!(content_hash_seen(&db, "same-content").unwrap());
-        assert!(!content_hash_seen(&db, "different-content").unwrap());
+        let first = db.conn.lock().unwrap().execute(
+            "INSERT OR IGNORE INTO hdr9000_content_hashes(device_key,content_hash,created_at) VALUES(?1,?2,datetime('now'))",
+            params![DEVICE_KEY, "same-content"],
+        ).unwrap();
+        let duplicate = db.conn.lock().unwrap().execute(
+            "INSERT OR IGNORE INTO hdr9000_content_hashes(device_key,content_hash,created_at) VALUES(?1,?2,datetime('now'))",
+            params![DEVICE_KEY, "same-content"],
+        ).unwrap();
+        assert_eq!(first, 1);
+        assert_eq!(duplicate, 0);
     }
 
     #[test]
@@ -711,5 +786,31 @@ mod tests {
         finish_success(&db, &revision, r#"{"dongTuXa":"61.0"}"#, "{}", "owner").unwrap();
         let status: String = db.conn.lock().unwrap().query_row("SELECT status FROM hdr9000_revisions WHERE id=1", [], |row| row.get(0)).unwrap();
         assert_eq!(status, "processed");
+    }
+
+    #[test]
+    fn expired_processing_or_sending_revision_is_recovered_without_a_pending_row() {
+        let db = open_memory_for_test().unwrap();
+        test_revision(&db, 1, "stale", "2026-07-28 09:00:00", "{}");
+        db.conn.lock().unwrap().execute(
+            "UPDATE hdr9000_revisions SET status='sending',sending_owner_id='old-instance',sending_lease_until=datetime('now','-1 second') WHERE id=1",
+            [],
+        ).unwrap();
+        assert_eq!(count_pending(&db).unwrap(), 0);
+        recover_expired(&db).unwrap();
+        let status: String = db.conn.lock().unwrap().query_row(
+            "SELECT status FROM hdr9000_revisions WHERE id=1", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(status, "send_error");
+        assert_eq!(count_pending(&db).unwrap(), 1);
+    }
+
+    #[test]
+    fn patient_lease_excludes_another_instance_until_released() {
+        let db = open_memory_for_test().unwrap();
+        assert!(claim_patient_lease(&db, "0188", "instance-a").unwrap());
+        assert!(!claim_patient_lease(&db, "0188", "instance-b").unwrap());
+        release_patient_lease(&db, "0188", "instance-a").unwrap();
+        assert!(claim_patient_lease(&db, "0188", "instance-b").unwrap());
     }
 }

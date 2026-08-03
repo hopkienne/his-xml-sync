@@ -247,6 +247,23 @@ fn migrate_hdr9000(conn: &Connection) -> Result<(), String> {
           updated_at TEXT NOT NULL,
           PRIMARY KEY (device_key, ma_ho_so)
         );
+        -- Dedupe nguyên tử theo thiết bị + nội dung, kể cả khi file được chép sang path khác.
+        CREATE TABLE IF NOT EXISTS hdr9000_content_hashes (
+          device_key TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          first_revision_id INTEGER,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (device_key, content_hash)
+        );
+        -- Lease theo hồ sơ bảo vệ hai revision cùng maHoSo ở nhiều instance app.
+        CREATE TABLE IF NOT EXISTS hdr9000_patient_leases (
+          device_key TEXT NOT NULL,
+          ma_ho_so TEXT NOT NULL,
+          owner_id TEXT NOT NULL,
+          lease_until TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (device_key, ma_ho_so)
+        );
         "#,
     )
     .map_err(|error| format!("Migration HDR-9000 thất bại: {error}"))?;
@@ -265,6 +282,11 @@ fn migrate_hdr9000(conn: &Connection) -> Result<(), String> {
         "CREATE INDEX IF NOT EXISTS idx_hdr9000_revisions_device_hash ON hdr9000_revisions(device_key, content_hash);",
     )
     .map_err(|error| format!("Tạo index hash HDR-9000 thất bại: {error}"))?;
+    // Backfill audit đã có trước khi bảng hash được thêm; OR IGNORE giữ revision đầu tiên.
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO hdr9000_content_hashes(device_key,content_hash,first_revision_id,created_at) SELECT device_key,content_hash,MIN(id),datetime('now') FROM hdr9000_revisions GROUP BY device_key,content_hash;",
+    )
+    .map_err(|error| format!("Backfill hash HDR-9000 thất bại: {error}"))?;
     Ok(())
 }
 
