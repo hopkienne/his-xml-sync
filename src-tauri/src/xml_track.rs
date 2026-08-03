@@ -99,6 +99,8 @@ pub enum XmlFileStatus {
     NoSupportedData,
     /// HDR-9000: mọi field đã được revision mới hơn gửi thành công.
     Superseded,
+    /// CT-800: tên file không có timestamp/model suffix hợp lệ.
+    InvalidFilename,
 }
 
 impl XmlFileStatus {
@@ -124,6 +126,7 @@ impl XmlFileStatus {
             "duplicate" => Self::Duplicate,
             "no_supported_data" => Self::NoSupportedData,
             "superseded" => Self::Superseded,
+            "invalid_filename" => Self::InvalidFilename,
             _ => Self::Waiting,
         }
     }

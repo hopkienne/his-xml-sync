@@ -9,7 +9,7 @@ type ScanProgress = { phase: string; current: number; total: number; percent: nu
 type AutoEvent = { ok: boolean; message: string };
 type WatchEvent = { active: boolean; message: string };
 const labels: Record<TrackedXmlStatus, string> = {
-  waiting: "Chờ xử lý", processing: "Đang xử lý", parsed: "Đã phân tích XML", patient_matched: "Đã tìm thấy bệnh nhân", mapped: "Đã mapping", sending: "Đang gửi HIS", processed: "Đã xử lý", patient_not_found: "Không tìm thấy bệnh nhân", treatment_ambiguous: "Không xác định đợt điều trị", service_not_found: "Không tìm thấy dịch vụ khám", xml_error: "Lỗi XML", mapping_error: "Lỗi mapping", send_error: "Lỗi gửi HIS", failed: "Thất bại", awaiting_pair: "Chờ lần đo 2", pairing: "Đang ghép cặp", pairing_error: "Lỗi ghép cặp", extra_measurement: "Lần đo thừa", duplicate: "Trùng nội dung", no_supported_data: "Không có dữ liệu hỗ trợ", superseded: "Đã được revision mới hơn thay thế",
+  waiting: "Chờ xử lý", processing: "Đang xử lý", parsed: "Đã phân tích XML", patient_matched: "Đã tìm thấy bệnh nhân", mapped: "Đã mapping", sending: "Đang gửi HIS", processed: "Đã xử lý", patient_not_found: "Không tìm thấy bệnh nhân", treatment_ambiguous: "Không xác định đợt điều trị", service_not_found: "Không tìm thấy dịch vụ khám", xml_error: "Lỗi XML", mapping_error: "Lỗi mapping", send_error: "Lỗi gửi HIS", failed: "Thất bại", awaiting_pair: "Chờ lần đo 2", pairing: "Đang ghép cặp", pairing_error: "Lỗi ghép cặp", extra_measurement: "Lần đo thừa", duplicate: "Trùng nội dung", no_supported_data: "Không có dữ liệu hỗ trợ", superseded: "Đã được revision mới hơn thay thế", invalid_filename: "Tên file không hợp lệ",
 };
 
 export function Hdr9000Panel() {

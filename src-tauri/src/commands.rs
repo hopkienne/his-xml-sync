@@ -1,5 +1,6 @@
 use crate::{
     app_logger::{self, ExportLogsResult, LogInfo},
+    ct800::{self, Ct800ProcessResult, Ct800ProcessState, Ct800RevisionDetail},
     db::AppDb,
     folder_watch,
     his_api::{self, HisAuthStatus},
@@ -261,6 +262,8 @@ pub async fn set_auto_process_enabled(
         {
             if device_key == "hdr-9000" {
                 hdr9000::trigger_auto_process_now(&app).await;
+            } else if device_key == "ct-800" {
+                ct800::trigger_auto_process_now(&app).await;
             } else {
                 folder_watch::trigger_auto_process_now(&app).await;
             }
@@ -289,6 +292,7 @@ pub fn set_tracking_folder_and_scan(
     let result = match device_key.as_str() {
         "kr-800" => xml_track::set_tracking_folder_and_scan(Some(&app), &db, &device_key, &folder),
         "hdr-9000" => hdr9000::set_tracking_folder_and_scan(Some(&app), &db, &folder),
+        "ct-800" => ct800::set_tracking_folder_and_scan(Some(&app), &db, &folder),
         _ => Err(format!("Thiết bị chưa được hỗ trợ: {device_key}")),
     };
     match result {
@@ -299,6 +303,8 @@ pub fn set_tracking_folder_and_scan(
                 tauri::async_runtime::spawn(async move {
                     if device_key == "hdr-9000" {
                         hdr9000::trigger_auto_process_now(&app_clone).await;
+                    } else if device_key == "ct-800" {
+                        ct800::trigger_auto_process_now(&app_clone).await;
                     } else {
                         folder_watch::trigger_auto_process_now(&app_clone).await;
                     }
@@ -341,6 +347,7 @@ pub fn rescan_tracking_folder(
     let result = match device_key.as_str() {
         "kr-800" => xml_track::rescan_tracking_folder(Some(&app), &db, &device_key),
         "hdr-9000" => hdr9000::rescan_tracking_folder(Some(&app), &db),
+        "ct-800" => ct800::rescan_tracking_folder(Some(&app), &db),
         _ => Err(format!("Thiết bị chưa được hỗ trợ: {device_key}")),
     };
     match result {
@@ -388,6 +395,7 @@ pub fn list_xml_files(
     let result = match device_key.as_str() {
         "kr-800" => xml_track::list_xml_files(&db, &device_key, from_time.as_deref(), to_time.as_deref()),
         "hdr-9000" => hdr9000::list_files(&db, from_time.as_deref(), to_time.as_deref()),
+        "ct-800" => ct800::list_files(&db, from_time.as_deref(), to_time.as_deref()),
         _ => Err(format!("Thiết bị chưa được hỗ trợ: {device_key}")),
     };
     match result {
@@ -459,6 +467,33 @@ pub async fn process_hdr9000(
         return Err(format!("Thiết bị chưa được hỗ trợ: {device_key}"));
     }
     hdr9000::process(&app, &db, &process_state, &from_time, &to_time).await
+}
+
+#[tauri::command]
+pub async fn process_ct800(
+    app: AppHandle,
+    db: State<'_, AppDb>,
+    process_state: State<'_, Ct800ProcessState>,
+    device_key: String,
+    from_time: String,
+    to_time: String,
+) -> Result<Ct800ProcessResult, String> {
+    if device_key != "ct-800" {
+        return Err(format!("Thiết bị chưa được hỗ trợ: {device_key}"));
+    }
+    ct800::process(&app, &db, &process_state, &from_time, &to_time).await
+}
+
+#[tauri::command]
+pub fn get_ct800_revision_detail(
+    db: State<'_, AppDb>,
+    device_key: String,
+    id: i64,
+) -> Result<Ct800RevisionDetail, String> {
+    if device_key != "ct-800" {
+        return Err(format!("Thiết bị chưa được hỗ trợ: {device_key}"));
+    }
+    ct800::revision_detail(&db, id)
 }
 
 #[tauri::command]

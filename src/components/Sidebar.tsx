@@ -153,7 +153,7 @@ function SidebarSection({
                 <span className="device-meta">
                   <span className="device-meta__name">{item.label}</span>
                   {variant === "device" ? (
-                    <span className="device-meta__hint">TOPCON · khúc xạ</span>
+                    <span className="device-meta__hint">{deviceHint(item.label)}</span>
                   ) : (
                     <span className="device-meta__hint">API · SQLite</span>
                   )}
@@ -171,4 +171,8 @@ function deviceShortLabel(label: string) {
   const cleaned = label.replace(/\s+/g, "");
   if (cleaned.length <= 3) return cleaned;
   return cleaned.slice(0, 3);
+}
+
+function deviceHint(label: string) {
+  return label === "CT-800" ? "TOPCON · nhãn áp" : "TOPCON · khúc xạ";
 }

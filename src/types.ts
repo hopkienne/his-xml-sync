@@ -1,8 +1,8 @@
 /** Mục điều hướng chính trên sidebar. */
-export type SidebarNavKey = "kr-800" | "hdr-9000" | "settings";
+export type SidebarNavKey = "kr-800" | "hdr-9000" | "ct-800" | "settings";
 
 /** Máy đo trên sidebar (có thể mở rộng thêm model khác sau này). */
-export type DeviceMenuKey = Extract<SidebarNavKey, "kr-800" | "hdr-9000">;
+export type DeviceMenuKey = Extract<SidebarNavKey, "kr-800" | "hdr-9000" | "ct-800">;
 
 export type DeviceMenuItem = {
   key: DeviceMenuKey;
@@ -90,7 +90,8 @@ export type TrackedXmlStatus =
   | "extra_measurement"
   | "duplicate"
   | "no_supported_data"
-  | "superseded";
+  | "superseded"
+  | "invalid_filename";
 
 export type TrackedXmlFile = {
   id: number;
@@ -107,6 +108,27 @@ export type TrackedXmlFile = {
    */
   createdAt: string;
   updatedAt: string;
+};
+
+export type Ct800RevisionDetail = {
+  id: number;
+  fileName: string;
+  maHoSo?: string | null;
+  sourceTime?: string | null;
+  xmlTime?: string | null;
+  machineSerial?: string | null;
+  xmlModel?: string | null;
+  contentHash: string;
+  rawRightIop?: string | null;
+  rawLeftIop?: string | null;
+  rightIopId?: number | null;
+  leftIopId?: number | null;
+  dvKhamId?: number | null;
+  requestPayload?: string | null;
+  responsePayload?: string | null;
+  status: string;
+  errorMessage?: string | null;
+  attemptCount: number;
 };
 
 export type DeviceFolderState = {

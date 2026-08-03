@@ -8,6 +8,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   AppLogInfo,
   AppSettings,
+  Ct800RevisionDetail,
   DeviceFolderState,
   ExportLogsResult,
   FolderScanResult,
@@ -31,6 +32,7 @@ export const fallbackSettings: AppSettings = {
 
 export const KR800_DEVICE_KEY = "kr-800";
 export const HDR9000_DEVICE_KEY = "hdr-9000";
+export const CT800_DEVICE_KEY = "ct-800";
 
 export async function getSettings(): Promise<AppSettings> {
   try {
@@ -221,6 +223,31 @@ export async function listHdr9000Files(
   });
 }
 
+/** CT-800 phải propagate lỗi DB/IPC; UI không được hiểu nhầm thành state rỗng. */
+export async function getCt800DeviceFolder(): Promise<DeviceFolderState> {
+  return await invoke<DeviceFolderState>("get_device_folder", {
+    deviceKey: CT800_DEVICE_KEY,
+  });
+}
+
+export async function listCt800Files(
+  fromTime: string,
+  toTime: string,
+): Promise<TrackedXmlFile[]> {
+  return await invoke<TrackedXmlFile[]>("list_xml_files", {
+    deviceKey: CT800_DEVICE_KEY,
+    fromTime,
+    toTime,
+  });
+}
+
+export async function getCt800RevisionDetail(id: number): Promise<Ct800RevisionDetail> {
+  return await invoke<Ct800RevisionDetail>("get_ct800_revision_detail", {
+    deviceKey: CT800_DEVICE_KEY,
+    id,
+  });
+}
+
 export type Kr800ProcessResult = {
   total: number;
   processed: number;
@@ -257,6 +284,19 @@ export async function processHdr9000(
 ): Promise<Hdr9000ProcessResult> {
   return await invoke<Hdr9000ProcessResult>("process_hdr9000", {
     deviceKey: HDR9000_DEVICE_KEY,
+    fromTime,
+    toTime,
+  });
+}
+
+export type Ct800ProcessResult = Hdr9000ProcessResult;
+
+export async function processCt800(
+  fromTime: string,
+  toTime: string,
+): Promise<Ct800ProcessResult> {
+  return await invoke<Ct800ProcessResult>("process_ct800", {
+    deviceKey: CT800_DEVICE_KEY,
     fromTime,
     toTime,
   });

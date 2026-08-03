@@ -188,8 +188,122 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     migrate_xml_files_file_send_schema(conn)?;
     normalize_legacy_pair_orders(conn)?;
     migrate_hdr9000(conn)?;
+    migrate_ct800(conn)?;
 
     Ok(())
+}
+
+/// CT-800 dùng revision độc lập (mỗi XML gửi ngay) và không chạm tới
+/// `xml_files` / `measurement_pairs` của KR-800.
+fn migrate_ct800(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS ct800_revisions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          device_key TEXT NOT NULL DEFAULT 'ct-800', file_name TEXT NOT NULL,
+          file_path TEXT NOT NULL, content_hash TEXT NOT NULL, ma_ho_so TEXT,
+          source_time TEXT, xml_time TEXT, machine_serial TEXT, xml_model TEXT,
+          raw_right_iop TEXT, raw_left_iop TEXT, right_iop_id INTEGER, left_iop_id INTEGER,
+          snapshot_xml BLOB NOT NULL, snapshot_payload TEXT NOT NULL,
+          filter_date TEXT NOT NULL, file_size INTEGER, file_modified_at TEXT,
+          dv_kham_id INTEGER, status TEXT NOT NULL DEFAULT 'waiting', error_message TEXT,
+          request_payload TEXT, response_payload TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,
+          sending_started_at TEXT, sending_owner_id TEXT, sending_lease_until TEXT,
+          processed_at TEXT, discovered_at TEXT NOT NULL, created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL, UNIQUE(device_key, file_path, content_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ct800_revisions_status_date
+          ON ct800_revisions(device_key, status, filter_date, source_time, id);
+        CREATE INDEX IF NOT EXISTS idx_ct800_revisions_patient
+          ON ct800_revisions(device_key, ma_ho_so, source_time, id);
+        CREATE TABLE IF NOT EXISTS ct800_field_versions (
+          device_key TEXT NOT NULL DEFAULT 'ct-800', ma_ho_so TEXT NOT NULL,
+          field_path TEXT NOT NULL, revision_id INTEGER NOT NULL, source_time TEXT NOT NULL,
+          created_at TEXT NOT NULL, PRIMARY KEY(device_key, ma_ho_so, field_path)
+        );
+        CREATE TABLE IF NOT EXISTS ct800_service_cache (
+          device_key TEXT NOT NULL DEFAULT 'ct-800', ma_ho_so TEXT NOT NULL,
+          dv_kham_id INTEGER NOT NULL, updated_at TEXT NOT NULL,
+          PRIMARY KEY(device_key, ma_ho_so)
+        );
+        CREATE TABLE IF NOT EXISTS ct800_content_hashes (
+          device_key TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          first_revision_id INTEGER,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(device_key, content_hash)
+        );
+        CREATE TABLE IF NOT EXISTS ct800_patient_leases (
+          device_key TEXT NOT NULL DEFAULT 'ct-800', ma_ho_so TEXT NOT NULL,
+          owner_id TEXT NOT NULL, lease_until TEXT NOT NULL, updated_at TEXT NOT NULL,
+          PRIMARY KEY(device_key, ma_ho_so)
+        );
+        "#,
+    )
+    .map_err(|e| format!("Migration CT-800 thất bại: {e}"))?;
+
+    migrate_ct800_revision_identity(conn)?;
+
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO ct800_content_hashes(device_key,content_hash,first_revision_id,created_at)
+         SELECT device_key,content_hash,MIN(id),datetime('now')
+         FROM ct800_revisions
+         WHERE status NOT IN ('invalid_filename','xml_error')
+         GROUP BY device_key,content_hash;",
+    )
+    .map_err(|e| format!("Backfill hash CT-800 thất bại: {e}"))?;
+    Ok(())
+}
+
+/// Một bản development ban đầu đặt UNIQUE(device_key, content_hash) ngay trên
+/// revision, khiến cùng nội dung từng có filename lỗi chặn file hợp lệ về sau.
+/// Rebuild lossless sang identity path+hash; dedupe toàn thiết bị nằm ở bảng
+/// `ct800_content_hashes` và chỉ áp dụng cho XML CT-800/TM hợp lệ.
+fn migrate_ct800_revision_identity(conn: &Connection) -> Result<(), String> {
+    let schema: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='ct800_revisions'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Đọc schema ct800_revisions thất bại: {e}"))?;
+    let compact: String = schema.chars().filter(|c| !c.is_whitespace()).collect();
+    if !compact.contains("UNIQUE(device_key,content_hash)") {
+        return Ok(());
+    }
+
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("Bắt đầu rebuild ct800_revisions thất bại: {e}"))?;
+    tx.execute_batch(
+        r#"
+        DROP TABLE IF EXISTS ct800_revisions_identity_migrated;
+        CREATE TABLE ct800_revisions_identity_migrated (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          device_key TEXT NOT NULL DEFAULT 'ct-800', file_name TEXT NOT NULL,
+          file_path TEXT NOT NULL, content_hash TEXT NOT NULL, ma_ho_so TEXT,
+          source_time TEXT, xml_time TEXT, machine_serial TEXT, xml_model TEXT,
+          raw_right_iop TEXT, raw_left_iop TEXT, right_iop_id INTEGER, left_iop_id INTEGER,
+          snapshot_xml BLOB NOT NULL, snapshot_payload TEXT NOT NULL,
+          filter_date TEXT NOT NULL, file_size INTEGER, file_modified_at TEXT,
+          dv_kham_id INTEGER, status TEXT NOT NULL DEFAULT 'waiting', error_message TEXT,
+          request_payload TEXT, response_payload TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,
+          sending_started_at TEXT, sending_owner_id TEXT, sending_lease_until TEXT,
+          processed_at TEXT, discovered_at TEXT NOT NULL, created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL, UNIQUE(device_key, file_path, content_hash)
+        );
+        INSERT INTO ct800_revisions_identity_migrated SELECT * FROM ct800_revisions;
+        DROP TABLE ct800_revisions;
+        ALTER TABLE ct800_revisions_identity_migrated RENAME TO ct800_revisions;
+        CREATE INDEX idx_ct800_revisions_status_date
+          ON ct800_revisions(device_key, status, filter_date, source_time, id);
+        CREATE INDEX idx_ct800_revisions_patient
+          ON ct800_revisions(device_key, ma_ho_so, source_time, id);
+        "#,
+    )
+    .map_err(|e| format!("Rebuild ct800_revisions thất bại: {e}"))?;
+    tx.commit()
+        .map_err(|e| format!("Commit rebuild ct800_revisions thất bại: {e}"))
 }
 
 /// HDR-9000 có revision độc lập: cùng đường dẫn nhưng hash mới là một lần gửi mới.

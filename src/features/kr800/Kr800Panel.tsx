@@ -77,6 +77,7 @@ const statusLabel: Record<TrackedXmlStatus, string> = {
   duplicate: "Trùng nội dung",
   no_supported_data: "Không có dữ liệu hỗ trợ",
   superseded: "Đã bị revision mới hơn thay thế",
+  invalid_filename: "Tên file không hợp lệ",
 };
 
 export function Kr800Panel({

@@ -12,6 +12,7 @@ import {
   type Kr800ProcessPhase,
 } from "../features/kr800/Kr800Panel";
 import { Hdr9000Panel } from "../features/hdr9000/Hdr9000Panel";
+import { Ct800Panel } from "../features/ct800/Ct800Panel";
 import { HisSettingsPanel } from "../features/settings/HisSettingsPanel";
 import {
   exportAppLogs,
@@ -61,6 +62,12 @@ const sidebarItems: SidebarNavItem[] = [
     key: "hdr-9000",
     label: "HDR-9000",
     description: "Theo dõi XML HDR-9000, revision và trạng thái gửi HIS",
+    section: "device",
+  },
+  {
+    key: "ct-800",
+    label: "CT-800",
+    description: "Theo dõi XML nhãn áp TOPCON CT-800 và trạng thái gửi HIS",
     section: "device",
   },
   {
@@ -688,6 +695,8 @@ export function HomeShell({ session, onLogout }: HomeShellProps) {
             />
           ) : activeNav === "hdr-9000" ? (
             <Hdr9000Panel />
+          ) : activeNav === "ct-800" ? (
+            <Ct800Panel />
           ) : (
             <Kr800Panel
               trackingFolder={trackingFolder}
