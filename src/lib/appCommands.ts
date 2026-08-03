@@ -202,6 +202,25 @@ export async function listXmlFiles(
   }
 }
 
+/** HDR-9000 cần propagate lỗi cấu hình để UI hiển thị đúng trạng thái runtime. */
+export async function getHdr9000DeviceFolder(): Promise<DeviceFolderState> {
+  return await invoke<DeviceFolderState>("get_device_folder", {
+    deviceKey: HDR9000_DEVICE_KEY,
+  });
+}
+
+/** HDR-9000 cần propagate lỗi để UI không hiểu nhầm lỗi DB/IPC là danh sách rỗng. */
+export async function listHdr9000Files(
+  fromTime: string,
+  toTime: string,
+): Promise<TrackedXmlFile[]> {
+  return await invoke<TrackedXmlFile[]>("list_xml_files", {
+    deviceKey: HDR9000_DEVICE_KEY,
+    fromTime,
+    toTime,
+  });
+}
+
 export type Kr800ProcessResult = {
   total: number;
   processed: number;

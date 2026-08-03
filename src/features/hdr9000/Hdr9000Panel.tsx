@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { FolderOpen, Loader2, Play, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HDR9000_DEVICE_KEY, getDeviceFolder, listXmlFiles, pickTrackingFolder, processHdr9000, rescanTrackingFolder, setAutoProcessEnabled, setTrackingFolderAndScan } from "../../lib/appCommands";
+import { HDR9000_DEVICE_KEY, getHdr9000DeviceFolder, listHdr9000Files, pickTrackingFolder, processHdr9000, rescanTrackingFolder, setAutoProcessEnabled, setTrackingFolderAndScan } from "../../lib/appCommands";
 import type { TrackedXmlFile, TrackedXmlStatus } from "../../types";
 import { defaultProcessRange, toFilterEndDateTime, toHisApiDateTime, type ProcessDateRange } from "../kr800/Kr800Panel";
 
@@ -24,20 +24,25 @@ export function Hdr9000Panel() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const rangeRef = useRef(range);
+  const loadSequence = useRef(0);
   rangeRef.current = range;
 
   const load = useCallback(async () => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     try {
       const from = toHisApiDateTime(rangeRef.current.from);
       const to = toFilterEndDateTime(rangeRef.current.to);
-      const [state, items] = await Promise.all([getDeviceFolder(HDR9000_DEVICE_KEY), from && to ? listXmlFiles(from, to, HDR9000_DEVICE_KEY) : Promise.resolve([] as TrackedXmlFile[])]);
+      const [state, items] = await Promise.all([getHdr9000DeviceFolder(), from && to ? listHdr9000Files(from, to) : Promise.resolve([] as TrackedXmlFile[])]);
+      if (sequence !== loadSequence.current) return;
       setFolder(state.trackingFolder ?? null);
       setAutoProcess(Boolean(state.autoProcessEnabled));
       setFiles(items);
+      setError(null);
     } catch (value) {
+      if (sequence !== loadSequence.current) return;
       setError(messageFrom(value) || "Không tải được dữ liệu HDR-9000.");
-    } finally { setLoading(false); }
+    } finally { if (sequence === loadSequence.current) setLoading(false); }
   }, []);
 
   useEffect(() => { void load(); }, [load, range.from, range.to]);
@@ -98,8 +103,14 @@ export function Hdr9000Panel() {
   async function process() {
     setProcessing(true); setError(null);
     try {
-      const result = await processHdr9000(toHisApiDateTime(range.from), toFilterEndDateTime(range.to));
-      setFiles(result.files);
+      const from = toHisApiDateTime(range.from);
+      const to = toFilterEndDateTime(range.to);
+      const result = await processHdr9000(from, to);
+      if (toHisApiDateTime(rangeRef.current.from) === from && toFilterEndDateTime(rangeRef.current.to) === to) {
+        setFiles(result.files);
+      } else {
+        void load();
+      }
       setMessage(result.total === 0 ? "Không có revision HDR-9000 chờ xử lý." : "Đã xử lý " + result.processed + "/" + result.total + "; bỏ qua " + result.skipped + "; lỗi " + result.failed + ".");
     } catch (value) { setError(messageFrom(value) || "Không xử lý được HDR-9000."); }
     finally { setProcessing(false); }
@@ -147,4 +158,3 @@ function messageFrom(value: unknown): string {
   if (value && typeof value === "object" && "message" in value && typeof value.message === "string") return value.message;
   return "";
 }
-

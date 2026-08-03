@@ -6,6 +6,7 @@ use crate::{
     xml_track::{DeviceFolderState, ScanProgress, TrackedXmlFile, XmlFileStatus},
 };
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use reqwest::Client;
 use roxmltree::Document;
 use rusqlite::{params, OptionalExtension};
@@ -13,14 +14,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
     time::{Duration, SystemTime},
 };
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 pub const DEVICE_KEY: &str = "hdr-9000";
 pub const SCAN_PROGRESS_EVENT: &str = "hdr9000:scan-progress";
@@ -29,6 +28,12 @@ const PATIENT_PATH: &str = "/api/his/v1/nb-kham-ck-mat/nguoi-benh";
 const SUMMARY_PATH: &str = "/api/his/v1/nb-dot-dieu-tri/tong-hop";
 const UPDATE_PATH: &str = "/api/his/v1/nb-kham-ck-mat";
 const LEASE_SECONDS: i64 = 120;
+const LEASE_HEARTBEAT_SECONDS: u64 = 30;
+const POLL_INTERVAL_SECONDS: u64 = 20;
+const WATCH_CONFIG_INTERVAL_SECONDS: u64 = 1;
+const RECOVERY_INTERVAL_SECONDS: u64 = 30;
+const MIN_FILE_AGE_SECONDS: u64 = 2;
+const EVENT_SETTLE_MILLIS: u64 = 2_200;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,7 +48,6 @@ pub struct Hdr9000ProcessResult {
 pub struct Hdr9000ProcessState {
     run_lock: Mutex<()>,
     token_lock: Mutex<()>,
-    patient_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     pub instance_id: String,
 }
 
@@ -52,7 +56,6 @@ impl Default for Hdr9000ProcessState {
         Self {
             run_lock: Mutex::new(()),
             token_lock: Mutex::new(()),
-            patient_locks: Mutex::new(HashMap::new()),
             instance_id: format!("hdr9000-{}-{}", std::process::id(), Local::now().timestamp_nanos_opt().unwrap_or_default()),
         }
     }
@@ -227,17 +230,32 @@ pub fn rescan_tracking_folder(app: Option<&AppHandle>, db: &AppDb) -> Result<cra
 }
 
 fn scan_folder(app: Option<&AppHandle>, db: &AppDb, folder: &str) -> Result<crate::xml_track::ScanResult, String> {
+    scan_folder_with_mode(app, db, folder, false)
+}
+
+fn scan_folder_with_mode(app: Option<&AppHandle>, db: &AppDb, folder: &str, incremental: bool) -> Result<crate::xml_track::ScanResult, String> {
     let entries = fs::read_dir(folder).map_err(|e| format!("Không đọc được thư mục HDR-9000: {e}"))?;
-    let paths: Vec<PathBuf> = entries.filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_file()).collect();
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Không đọc được entry trong folder HDR-9000: {e}"))?;
+        let file_type = entry.file_type().map_err(|e| format!("Không đọc được loại entry HDR-9000: {e}"))?;
+        if file_type.is_file() { paths.push(entry.path()); }
+    }
     let total = paths.len();
+    let known_metadata = if incremental { Some(load_known_metadata(db)?) } else { None };
     let mut inserted = 0usize;
     let mut skipped = 0usize;
     for (index, path) in paths.iter().enumerate() {
-        if let Some(app) = app {
+        let current = index + 1;
+        if let Some(app) = app.filter(|_| current == total || current % 20 == 0) {
             let percent = if total == 0 { 100 } else { (((index + 1) * 100) / total) as u8 };
-            let _ = app.emit(SCAN_PROGRESS_EVENT, ScanProgress { phase: "index".into(), current: index + 1, total, percent, message: "Đang kiểm tra XML HDR-9000…".into() });
+            let _ = app.emit(SCAN_PROGRESS_EVENT, ScanProgress { phase: "index".into(), current, total, percent, message: "Đang kiểm tra XML HDR-9000…".into() });
         }
-        match index_path(db, path, Duration::from_secs(2))? {
+        if known_metadata.as_ref().map(|known| metadata_is_known(known, path)).transpose()?.unwrap_or(false) {
+            skipped += 1;
+            continue;
+        }
+        match index_path(db, path, Duration::from_secs(MIN_FILE_AGE_SECONDS))? {
             IndexOutcome::Inserted => inserted += 1,
             IndexOutcome::Skipped | IndexOutcome::Duplicate => skipped += 1,
         }
@@ -261,11 +279,26 @@ pub fn index_path(db: &AppDb, path: &Path, min_age: Duration) -> Result<IndexOut
     if !path.extension().and_then(|x| x.to_str()).map(|x| x.eq_ignore_ascii_case("xml")).unwrap_or(false) {
         return Ok(IndexOutcome::Skipped);
     }
-    let metadata = fs::metadata(path).map_err(|e| format!("Không đọc metadata XML: {e}"))?;
-    if metadata.modified().ok().and_then(|time| time.elapsed().ok()).map(|age| age < min_age).unwrap_or(false) {
-        return Ok(IndexOutcome::Skipped);
+    let metadata_before = fs::metadata(path).map_err(|e| format!("Không đọc metadata XML: {e}"))?;
+    let modified_before = metadata_before.modified().ok();
+    if let Some(modified) = modified_before.as_ref() {
+        match modified.elapsed() {
+            Ok(age) if age < min_age => return Ok(IndexOutcome::Skipped),
+            Err(_) => return Ok(IndexOutcome::Skipped),
+            _ => {}
+        }
     }
     let bytes = fs::read(path).map_err(|e| format!("Không đọc XML HDR-9000: {e}"))?;
+    let metadata = fs::metadata(path).map_err(|e| format!("Không đọc lại metadata XML: {e}"))?;
+    if metadata.len() != metadata_before.len()
+        || metadata.modified().ok() != modified_before
+        || bytes.len() as u64 != metadata.len()
+    {
+        app_logger::info("hdr9000", &format!("defer unstable file={}", path.display()));
+        return Ok(IndexOutcome::Skipped);
+    }
+    let path_text = path.to_string_lossy().to_string();
+    let modified_text = metadata.modified().ok().and_then(system_time_to_local);
     let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("unknown.xml");
     let parsed = match parse_hdr9000_xml(&bytes, file_name) {
         Ok(parsed) => parsed,
@@ -282,7 +315,6 @@ pub fn index_path(db: &AppDb, path: &Path, min_age: Duration) -> Result<IndexOut
     let hash = format!("{:x}", Sha256::digest(&bytes));
     let payload = serde_json::to_string(&parsed.payload).map_err(|e| e.to_string())?;
     let status = if parsed.payload.as_object().map(|value| value.is_empty()).unwrap_or(true) { "no_supported_data" } else { "waiting" };
-    let path_text = path.to_string_lossy().to_string();
     let mut conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
     let tx = conn.transaction().map_err(|e| format!("Mở transaction HDR-9000: {e}"))?;
     let reserved = tx.execute(
@@ -295,7 +327,7 @@ pub fn index_path(db: &AppDb, path: &Path, min_age: Duration) -> Result<IndexOut
         return Ok(IndexOutcome::Duplicate);
     }
     tx.execute("INSERT INTO hdr9000_revisions(device_key,file_name,file_path,content_hash,ma_ho_so,patient_id,filter_date,date_source,source_time,snapshot_xml,snapshot_payload,status,discovered_at,created_at,updated_at,file_size,file_modified_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,datetime('now'),datetime('now'),datetime('now'),?13,?14)",
-        params![DEVICE_KEY, file_name, path_text, hash, parsed.ma_ho_so, parsed.patient_id, dates.filter_date, dates.date_source, dates.source_time, bytes, payload, status, metadata.len() as i64, metadata.modified().ok().and_then(system_time_to_local)])
+        params![DEVICE_KEY, file_name, path_text, hash, parsed.ma_ho_so, parsed.patient_id, dates.filter_date, dates.date_source, dates.source_time, bytes, payload, status, metadata.len() as i64, modified_text])
         .map_err(|e| format!("Lưu revision HDR-9000: {e}"))?;
     let revision_id: i64 = tx.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))
         .map_err(|e| format!("Đọc revision HDR-9000 vừa lưu: {e}"))?;
@@ -304,6 +336,28 @@ pub fn index_path(db: &AppDb, path: &Path, min_age: Duration) -> Result<IndexOut
     tx.commit().map_err(|e| format!("Lưu transaction HDR-9000: {e}"))?;
     app_logger::info("hdr9000", &format!("indexed model=HDR-9000 file={} maHoSo={} patientId={:?} hash={} source_time={} date_source={}", file_name, parsed.ma_ho_so, parsed.patient_id, &hash[..12], dates.source_time, dates.date_source));
     Ok(IndexOutcome::Inserted)
+}
+
+fn load_known_metadata(db: &AppDb) -> Result<std::collections::HashSet<(String, i64, String)>, String> {
+    let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
+    let mut statement = conn.prepare("SELECT revision.file_path,revision.file_size,COALESCE(revision.file_modified_at,'') FROM hdr9000_revisions revision JOIN (SELECT file_path,MAX(id) AS id FROM hdr9000_revisions WHERE device_key=?1 GROUP BY file_path) latest ON latest.id=revision.id WHERE revision.file_size IS NOT NULL")
+        .map_err(|e| format!("Chuẩn bị metadata HDR-9000: {e}"))?;
+    let rows = statement.query_map(params![DEVICE_KEY], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(|e| format!("Đọc metadata HDR-9000: {e}"))?;
+    let mut metadata = std::collections::HashSet::new();
+    for row in rows {
+        metadata.insert(row.map_err(|e| format!("Đọc dòng metadata HDR-9000: {e}"))?);
+    }
+    Ok(metadata)
+}
+
+fn metadata_is_known(known: &std::collections::HashSet<(String, i64, String)>, path: &Path) -> Result<bool, String> {
+    if !path.extension().and_then(|value| value.to_str()).map(|value| value.eq_ignore_ascii_case("xml")).unwrap_or(false) {
+        return Ok(true);
+    }
+    let metadata = fs::metadata(path).map_err(|e| format!("Không đọc metadata XML: {e}"))?;
+    let modified = metadata.modified().ok().and_then(system_time_to_local).unwrap_or_default();
+    Ok(known.contains(&(path.to_string_lossy().to_string(), metadata.len() as i64, modified)))
 }
 
 pub fn list_files(db: &AppDb, from: Option<&str>, to: Option<&str>) -> Result<Vec<TrackedXmlFile>, String> {
@@ -328,50 +382,248 @@ pub fn count_pending(db: &AppDb) -> Result<usize, String> {
         .map(|value| value as usize).map_err(|e| e.to_string())
 }
 
-/// Poll riêng cho HDR-9000; revision hash giúp phát hiện cả file bị ghi đè cùng path.
+/// Watcher riêng cho HDR-9000: notify chụp revision mới sớm, poll metadata bù
+/// event bị miss trên network share, recovery chạy độc lập với việc quét folder.
 pub fn start_watch(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        loop {
-            background_tick(&app).await;
-            tokio::time::sleep(Duration::from_secs(10)).await;
-        }
+        run_watch_loop(app).await;
     });
 }
 
 pub async fn trigger_auto_process_now(app: &AppHandle) {
-    background_tick(app).await;
+    recover_expired_for_app(app);
+    schedule_process_pending(app);
 }
 
-async fn background_tick(app: &AppHandle) {
+async fn run_watch_loop(app: AppHandle) {
+    let (path_tx, mut path_rx) = mpsc::unbounded_channel::<PathBuf>();
+    let (scan_tx, mut scan_rx) = mpsc::unbounded_channel::<(String, Result<crate::xml_track::ScanResult, String>)>();
+    let (event_result_tx, mut event_result_rx) = mpsc::unbounded_channel::<Result<(String, usize, usize), String>>();
+    let mut current_folder: Option<String> = None;
+    let mut watcher: Option<RecommendedWatcher> = None;
+    let mut scan_in_flight = false;
+    let mut poll = tokio::time::interval(Duration::from_secs(POLL_INTERVAL_SECONDS));
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut config_refresh = tokio::time::interval(Duration::from_secs(WATCH_CONFIG_INTERVAL_SECONDS));
+    config_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut recovery = tokio::time::interval(Duration::from_secs(RECOVERY_INTERVAL_SECONDS));
+    recovery.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    recovery.tick().await;
+
+    recover_expired_for_app(&app);
+    schedule_process_pending(&app);
+    loop {
+        tokio::select! {
+            _ = config_refresh.tick() => {
+                let folder = match configured_folder(&app) {
+                    Ok(folder) => folder,
+                    Err(error) => {
+                        app_logger::error("hdr9000", &format!("Không đọc được cấu hình watcher: {error}"));
+                        emit_watch_status(&app, false, None, &format!("Lỗi đọc cấu hình HDR-9000: {error}"));
+                        continue;
+                    }
+                };
+                if folder != current_folder {
+                    current_folder = folder.clone();
+                    watcher = folder.as_deref().and_then(|value| start_fs_watcher(value, path_tx.clone()));
+                    match folder.as_deref() {
+                        Some(folder) => {
+                            emit_watch_status(&app, watcher.is_some(), Some(folder), if watcher.is_some() { "Đang theo dõi folder HDR-9000." } else { "Không gắn được filesystem watcher; vẫn đang poll dự phòng." });
+                            if !scan_in_flight {
+                                scan_in_flight = true;
+                                schedule_incremental_scan(&app, folder.to_string(), &scan_tx);
+                            }
+                        }
+                        None => emit_watch_status(&app, false, None, "Chưa chọn thư mục tracking HDR-9000."),
+                    }
+                }
+            }
+            _ = poll.tick() => {
+                if let Some(folder) = current_folder.clone() {
+                    if !scan_in_flight {
+                        scan_in_flight = true;
+                        if watcher.is_none() {
+                            watcher = start_fs_watcher(&folder, path_tx.clone());
+                            emit_watch_status(&app, watcher.is_some(), Some(&folder), if watcher.is_some() { "Đang theo dõi folder HDR-9000." } else { "Không gắn được filesystem watcher; vẫn đang poll dự phòng." });
+                        }
+                        schedule_incremental_scan(&app, folder, &scan_tx);
+                    }
+                }
+            }
+            Some((folder, result)) = scan_rx.recv() => {
+                scan_in_flight = false;
+                if current_folder.as_deref() != Some(folder.as_str()) {
+                    if let Some(current) = current_folder.clone() {
+                        scan_in_flight = true;
+                        schedule_incremental_scan(&app, current, &scan_tx);
+                    }
+                    continue;
+                }
+                match result {
+                    Ok(result) => {
+                        emit_watch_status(&app, watcher.is_some(), Some(&folder), if watcher.is_some() { "Đang theo dõi folder HDR-9000." } else { "Filesystem watcher chưa sẵn sàng; poll dự phòng đang hoạt động." });
+                        if result.inserted_count > 0 {
+                            emit_indexed(&app, "poll", &folder, result.scanned_count, result.inserted_count);
+                            schedule_process_pending(&app);
+                        }
+                    }
+                    Err(error) => {
+                        app_logger::error("hdr9000", &format!("Background scan thất bại folder={folder}: {error}"));
+                        emit_watch_status(&app, false, Some(&folder), &format!("Không đọc được folder HDR-9000: {error}"));
+                    }
+                }
+            }
+            _ = recovery.tick() => {
+                recover_expired_for_app(&app);
+                schedule_process_pending(&app);
+            },
+            Some(first_path) = path_rx.recv() => {
+                let mut paths = vec![first_path];
+                while let Ok(path) = path_rx.try_recv() { paths.push(path); }
+                // Chỉ debounce burst đã có sẵn. Event đến trong lúc chờ được giữ
+                // cho lượt kế tiếp, tránh nuốt mất lần ghi đè tiếp theo cùng path.
+                let event_app = app.clone();
+                let result_sender = event_result_tx.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(EVENT_SETTLE_MILLIS)).await;
+                    let _ = result_sender.send(index_paths_blocking(&event_app, paths).await);
+                });
+            }
+            Some(result) = event_result_rx.recv() => {
+                match result {
+                    Ok((folder, scanned, inserted)) if inserted > 0 => {
+                        emit_indexed(&app, "watcher", &folder, scanned, inserted);
+                        schedule_process_pending(&app);
+                    }
+                    Ok(_) => {}
+                    Err(error) => app_logger::error("hdr9000", &format!("Index event filesystem thất bại: {error}")),
+                }
+            }
+        }
+    }
+}
+
+fn configured_folder(app: &AppHandle) -> Result<Option<String>, String> {
+    let db = app.try_state::<AppDb>().ok_or_else(|| "AppDb chưa sẵn sàng.".to_string())?;
+    Ok(folder_state(&db)?.tracking_folder.filter(|folder| !folder.trim().is_empty()))
+}
+
+fn start_fs_watcher(folder: &str, sender: mpsc::UnboundedSender<PathBuf>) -> Option<RecommendedWatcher> {
+    let mut watcher = match notify::recommended_watcher(move |result: Result<notify::Event, notify::Error>| {
+        match result {
+            Ok(event) if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_) | EventKind::Any) => {
+                for path in event.paths {
+                    if path.extension().and_then(|value| value.to_str()).map(|value| value.eq_ignore_ascii_case("xml")).unwrap_or(false) {
+                        let _ = sender.send(path);
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(error) => app_logger::error("hdr9000", &format!("Filesystem watcher lỗi: {error}")),
+        }
+    }) {
+        Ok(watcher) => watcher,
+        Err(error) => { app_logger::error("hdr9000", &format!("Không tạo được filesystem watcher: {error}")); return None; }
+    };
+    if let Err(error) = watcher.watch(Path::new(folder), RecursiveMode::NonRecursive) {
+        app_logger::error("hdr9000", &format!("Không watch được folder={folder}: {error}"));
+        return None;
+    }
+    Some(watcher)
+}
+
+async fn scan_incremental_blocking(app: &AppHandle, folder: String) -> Result<crate::xml_track::ScanResult, String> {
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = app.try_state::<AppDb>().ok_or_else(|| "AppDb chưa sẵn sàng.".to_string())?;
+        scan_folder_with_mode(None, &db, &folder, true)
+    }).await.map_err(|e| format!("spawn_blocking scan HDR-9000: {e}"))?
+}
+
+fn schedule_incremental_scan(
+    app: &AppHandle,
+    folder: String,
+    sender: &mpsc::UnboundedSender<(String, Result<crate::xml_track::ScanResult, String>)>,
+) {
+    let scan_app = app.clone();
+    let result_sender = sender.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = scan_incremental_blocking(&scan_app, folder.clone()).await;
+        let _ = result_sender.send((folder, result));
+    });
+}
+
+async fn index_paths_blocking(app: &AppHandle, paths: Vec<PathBuf>) -> Result<(String, usize, usize), String> {
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let db = app.try_state::<AppDb>().ok_or_else(|| "AppDb chưa sẵn sàng.".to_string())?;
+        let folder = folder_state(&db)?.tracking_folder.unwrap_or_default();
+        let folder_path = PathBuf::from(&folder);
+        let mut seen = std::collections::HashSet::new();
+        let mut inserted = 0usize;
+        for path in paths {
+            if folder.is_empty() || !path.starts_with(&folder_path) { continue; }
+            let key = path.to_string_lossy().to_string();
+            if !seen.insert(key) { continue; }
+            match index_path(&db, &path, Duration::from_secs(MIN_FILE_AGE_SECONDS)) {
+                Ok(IndexOutcome::Inserted) => inserted += 1,
+                Ok(IndexOutcome::Skipped | IndexOutcome::Duplicate) => {}
+                Err(error) => app_logger::error("hdr9000", &format!("Không index được file={}: {error}", path.display())),
+            }
+        }
+        Ok((folder, seen.len(), inserted))
+    }).await.map_err(|e| format!("spawn_blocking index HDR-9000: {e}"))?
+}
+
+fn emit_watch_status(app: &AppHandle, active: bool, folder: Option<&str>, message: &str) {
+    let _ = app.emit("hdr9000:watch-status", serde_json::json!({"active":active,"trackingFolder":folder,"message":message}));
+}
+
+fn emit_indexed(app: &AppHandle, source: &str, folder: &str, scanned: usize, inserted: usize) {
+    let _ = app.emit("hdr9000:files-indexed", serde_json::json!({"source":source,"insertedCount":inserted,"scannedCount":scanned,"trackingFolder":folder,"inserted":[]}));
+}
+
+fn recover_expired_for_app(app: &AppHandle) {
     let Some(db) = app.try_state::<AppDb>() else { return; };
     if let Err(error) = recover_expired(&db) {
         app_logger::error("hdr9000", &format!("Không khôi phục lease HDR-9000 hết hạn: {error}"));
-        return;
     }
-    let state = match folder_state(&db) { Ok(state) => state, Err(error) => { app_logger::error("hdr9000", &error); return; } };
-    let Some(folder) = state.tracking_folder else {
-        let _ = app.emit("hdr9000:watch-status", serde_json::json!({"active":false,"trackingFolder":null,"message":"Chưa chọn thư mục tracking HDR-9000."}));
-        return;
+}
+
+fn schedule_process_pending(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move { process_pending_if_enabled(&app).await; });
+}
+
+async fn process_pending_if_enabled(app: &AppHandle) {
+    let Some(db) = app.try_state::<AppDb>() else { return; };
+    let auto_enabled = match folder_state(&db) {
+        Ok(state) => state.auto_process_enabled,
+        Err(error) => { emit_auto_error(app, &format!("Không đọc được cấu hình HDR-9000: {error}")); return; }
     };
-    let _ = app.emit("hdr9000:watch-status", serde_json::json!({"active":true,"trackingFolder":folder,"message":"Đang theo dõi folder HDR-9000."}));
-    let before = count_pending(&db).unwrap_or(0);
-    let scan = scan_folder(None, &db, &folder);
-    if let Ok(result) = scan {
-        if result.inserted_count > 0 {
-            let _ = app.emit("hdr9000:files-indexed", serde_json::json!({"source":"poll","insertedCount":result.inserted_count,"scannedCount":result.scanned_count,"trackingFolder":folder,"inserted":[]}));
-        }
-    }
-    if !state.auto_process_enabled { return; }
-    let pending = count_pending(&db).unwrap_or(before);
+    if !auto_enabled { return; }
+    let pending = match count_pending(&db) {
+        Ok(pending) => pending,
+        Err(error) => { emit_auto_error(app, &format!("Không đếm được queue HDR-9000: {error}")); return; }
+    };
     if pending == 0 { return; }
     // Recovery không bị giới hạn hôm nay: file lỗi từ ngày cũ phải được retry sau restart.
-    let Some((from, to)) = pending_range(&db).unwrap_or(None) else { return; };
+    let range = match pending_range(&db) {
+        Ok(range) => range,
+        Err(error) => { emit_auto_error(app, &format!("Không đọc được khoảng retry HDR-9000: {error}")); return; }
+    };
+    let Some((from, to)) = range else { return; };
     let Some(process_state) = app.try_state::<Hdr9000ProcessState>() else { return; };
     match try_process(app, &db, &process_state, &from, &to).await {
         Ok(Some(result)) => { let _ = app.emit("hdr9000:auto-process", serde_json::json!({"ok":true,"message":format!("Tự xử lý: {}/{} thành công; bỏ qua {}; lỗi {}.",result.processed,result.total,result.skipped,result.failed),"fromTime":from,"toTime":to,"total":result.total,"processed":result.processed,"failed":result.failed,"skipped":result.skipped,"busy":false})); }
         Ok(None) => { let _ = app.emit("hdr9000:auto-process", serde_json::json!({"ok":true,"message":"Pipeline HDR-9000 đang bận.","fromTime":from,"toTime":to,"total":0,"processed":0,"failed":0,"skipped":0,"busy":true})); }
         Err(error) => { let _ = app.emit("hdr9000:auto-process", serde_json::json!({"ok":false,"message":error,"fromTime":from,"toTime":to,"total":0,"processed":0,"failed":0,"skipped":0,"busy":false})); }
     }
+}
+
+fn emit_auto_error(app: &AppHandle, message: &str) {
+    app_logger::error("hdr9000", message);
+    let _ = app.emit("hdr9000:auto-process", serde_json::json!({"ok":false,"message":message,"fromTime":"","toTime":"","total":0,"processed":0,"failed":0,"skipped":0,"busy":false}));
 }
 
 pub async fn process(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState, from: &str, to: &str) -> Result<Hdr9000ProcessResult, String> {
@@ -426,11 +678,6 @@ async fn process_one(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState, c
     let parsed = parse_hdr9000_xml(&revision.xml, &revision.file_name).map_err(|e| {
         fail(db, id, "xml_error", &e.to_string(), &state.instance_id).ok(); e.to_string()
     })?;
-    let lock = {
-        let mut locks = state.patient_locks.lock().await;
-        Arc::clone(locks.entry(revision.ma_ho_so.clone()).or_insert_with(|| Arc::new(Mutex::new(()))))
-    };
-    let _patient = lock.lock().await;
     if !claim_patient_lease(db, &revision.ma_ho_so, &state.instance_id)? {
         release_claim(db, id, &state.instance_id)?;
         app_logger::info("hdr9000", &format!("revision_id={id} maHoSo={} đang được instance khác xử lý", revision.ma_ho_so));
@@ -438,7 +685,7 @@ async fn process_one(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState, c
         return Ok(ProcessOne::Skipped);
     }
 
-    let result = async {
+    let operation = async {
         let payload = stale_filtered_payload(db, &revision)?;
         if payload.as_object().map(|value| value.is_empty()).unwrap_or(true) {
             set_status(db, id, "superseded", None, &state.instance_id)?;
@@ -463,7 +710,20 @@ async fn process_one(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState, c
             emit_file(app, db, id);
             Ok(ProcessOne::Processed)
         }
-    }.await;
+    };
+    tokio::pin!(operation);
+    let result = loop {
+        tokio::select! {
+            result = &mut operation => break result,
+            _ = tokio::time::sleep(Duration::from_secs(LEASE_HEARTBEAT_SECONDS)) => {
+                match renew_leases(db, id, &revision.ma_ho_so, &state.instance_id) {
+                    Ok(true) => {}
+                    Ok(false) => break Err("send_error: Mất ownership lease HDR-9000 trong khi đang xử lý.".to_string()),
+                    Err(error) => break Err(format!("send_error: Không gia hạn được lease HDR-9000: {error}")),
+                }
+            }
+        }
+    };
 
     // Lưu trạng thái revision trước khi nhả khóa liên tiến trình, tránh một
     // instance khác gửi revision cùng hồ sơ trong khoảng rất ngắn khi vừa lỗi.
@@ -523,6 +783,26 @@ fn claim_patient_lease(db: &AppDb, ma_ho_so: &str, owner: &str) -> Result<bool, 
     Ok(changed == 1)
 }
 
+fn renew_leases(db: &AppDb, id: i64, ma_ho_so: &str, owner: &str) -> Result<bool, String> {
+    let lease_modifier = format!("+{LEASE_SECONDS} seconds");
+    let mut conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
+    let tx = conn.transaction().map_err(|e| format!("Mở transaction gia hạn lease: {e}"))?;
+    let revision_changed = tx.execute(
+        "UPDATE hdr9000_revisions SET sending_lease_until=datetime('now',?1),updated_at=datetime('now') WHERE id=?2 AND device_key=?3 AND sending_owner_id=?4 AND status IN ('processing','sending') AND sending_lease_until > datetime('now')",
+        params![lease_modifier, id, DEVICE_KEY, owner],
+    ).map_err(|e| format!("Gia hạn lease revision HDR-9000: {e}"))?;
+    let patient_changed = tx.execute(
+        "UPDATE hdr9000_patient_leases SET lease_until=datetime('now',?1),updated_at=datetime('now') WHERE device_key=?2 AND ma_ho_so=?3 AND owner_id=?4 AND lease_until > datetime('now')",
+        params![lease_modifier, DEVICE_KEY, ma_ho_so, owner],
+    ).map_err(|e| format!("Gia hạn lease maHoSo HDR-9000: {e}"))?;
+    if revision_changed != 1 || patient_changed != 1 {
+        tx.rollback().map_err(|e| format!("Rollback gia hạn lease HDR-9000: {e}"))?;
+        return Ok(false);
+    }
+    tx.commit().map_err(|e| format!("Commit gia hạn lease HDR-9000: {e}"))?;
+    Ok(true)
+}
+
 fn release_patient_lease(db: &AppDb, ma_ho_so: &str, owner: &str) -> Result<(), String> {
     db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
         "DELETE FROM hdr9000_patient_leases WHERE device_key=?1 AND ma_ho_so=?2 AND owner_id=?3",
@@ -531,9 +811,10 @@ fn release_patient_lease(db: &AppDb, ma_ho_so: &str, owner: &str) -> Result<(), 
 }
 
 fn save_request(db: &AppDb, id: i64, dv_kham_id: i64, body: &str, owner: &str) -> Result<(), String> {
-    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
-        "UPDATE hdr9000_revisions SET status='sending',dv_kham_id=?1,request_payload=?2,attempt_count=attempt_count+1,updated_at=datetime('now') WHERE id=?3 AND sending_owner_id=?4 AND device_key=?5",
-        params![dv_kham_id, body, id, owner, DEVICE_KEY]).map(|_| ()).map_err(|e| e.to_string())
+    let changed = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
+        "UPDATE hdr9000_revisions SET status='sending',dv_kham_id=?1,request_payload=?2,attempt_count=attempt_count+1,updated_at=datetime('now') WHERE id=?3 AND sending_owner_id=?4 AND device_key=?5 AND status IN ('processing','sending') AND sending_lease_until > datetime('now')",
+        params![dv_kham_id, body, id, owner, DEVICE_KEY]).map_err(|e| e.to_string())?;
+    if changed == 1 { Ok(()) } else { Err("Revision HDR-9000 không còn lease hợp lệ trước khi gửi HIS.".into()) }
 }
 
 fn fail(db: &AppDb, id: i64, status: &str, message: &str, owner: &str) -> Result<(), String> {
@@ -543,9 +824,10 @@ fn fail(db: &AppDb, id: i64, status: &str, message: &str, owner: &str) -> Result
 }
 
 fn set_status(db: &AppDb, id: i64, status: &str, message: Option<&str>, owner: &str) -> Result<(), String> {
-    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
-        "UPDATE hdr9000_revisions SET status=?1,error_message=?2,sending_owner_id=NULL,sending_lease_until=NULL,processed_at=CASE WHEN ?1='superseded' THEN datetime('now') ELSE processed_at END,updated_at=datetime('now') WHERE id=?3 AND sending_owner_id=?4 AND device_key=?5",
-        params![status, message, id, owner, DEVICE_KEY]).map(|_| ()).map_err(|e| e.to_string())
+    let changed = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
+        "UPDATE hdr9000_revisions SET status=?1,error_message=?2,sending_owner_id=NULL,sending_lease_until=NULL,processed_at=CASE WHEN ?1='superseded' THEN datetime('now') ELSE processed_at END,updated_at=datetime('now') WHERE id=?3 AND sending_owner_id=?4 AND device_key=?5 AND sending_lease_until > datetime('now')",
+        params![status, message, id, owner, DEVICE_KEY]).map_err(|e| e.to_string())?;
+    if changed == 1 { Ok(()) } else { Err("Revision HDR-9000 không còn lease hợp lệ khi đổi trạng thái.".into()) }
 }
 
 fn recover_expired(db: &AppDb) -> Result<(), String> {
@@ -597,7 +879,7 @@ fn finish_success(db: &AppDb, revision: &Revision, request: &str, response: &str
         tx.execute("INSERT INTO hdr9000_field_versions(device_key,ma_ho_so,field_path,revision_id,source_time,created_at) VALUES(?1,?2,?3,?4,?5,datetime('now')) ON CONFLICT DO UPDATE SET revision_id=excluded.revision_id,source_time=excluded.source_time,created_at=excluded.created_at",
             params![DEVICE_KEY, revision.ma_ho_so, field, revision.id, revision.source_time]).map_err(|e| e.to_string())?;
     }
-    let changed = tx.execute("UPDATE hdr9000_revisions SET status='processed',response_payload=?1,processed_at=datetime('now'),sending_owner_id=NULL,sending_lease_until=NULL,updated_at=datetime('now') WHERE id=?2 AND sending_owner_id=?3 AND device_key=?4",
+    let changed = tx.execute("UPDATE hdr9000_revisions SET status='processed',response_payload=?1,processed_at=datetime('now'),sending_owner_id=NULL,sending_lease_until=NULL,updated_at=datetime('now') WHERE id=?2 AND sending_owner_id=?3 AND device_key=?4 AND sending_lease_until > datetime('now')",
         params![response, revision.id, owner, DEVICE_KEY]).map_err(|e| e.to_string())?;
     if changed != 1 { return Err("Không thể hoàn tất revision HDR-9000: lease không còn hợp lệ.".into()); }
     tx.commit().map_err(|e| e.to_string())
@@ -649,10 +931,11 @@ fn clear_service_cache(db: &AppDb, ma_ho_so: &str) -> Result<(), String> {
 }
 
 fn save_response(db: &AppDb, id: i64, response: &str, owner: &str) -> Result<(), String> {
-    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
-        "UPDATE hdr9000_revisions SET response_payload=?1,updated_at=datetime('now') WHERE id=?2 AND sending_owner_id=?3 AND device_key=?4",
+    let changed = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
+        "UPDATE hdr9000_revisions SET response_payload=?1,updated_at=datetime('now') WHERE id=?2 AND sending_owner_id=?3 AND device_key=?4 AND sending_lease_until > datetime('now')",
         params![response, id, owner, DEVICE_KEY],
-    ).map(|_| ()).map_err(|e| e.to_string())
+    ).map_err(|e| e.to_string())?;
+    if changed == 1 { Ok(()) } else { Err("Revision HDR-9000 không còn lease hợp lệ khi lưu response HIS.".into()) }
 }
 
 async fn send_update(db: &AppDb, state: &Hdr9000ProcessState, client: &Client, settings: &AppSettings, dv_kham_id: i64, payload: &Value, id: i64) -> Result<String, String> {
@@ -812,5 +1095,75 @@ mod tests {
         assert!(!claim_patient_lease(&db, "0188", "instance-b").unwrap());
         release_patient_lease(&db, "0188", "instance-a").unwrap();
         assert!(claim_patient_lease(&db, "0188", "instance-b").unwrap());
+    }
+
+    #[test]
+    fn heartbeat_renews_both_revision_and_patient_leases() {
+        let db = open_memory_for_test().unwrap();
+        test_revision(&db, 1, "heartbeat", "2026-07-28 09:00:00", r#"{"dongTuXa":"61.0"}"#);
+        assert!(claim(&db, 1, "instance-a").unwrap());
+        assert!(claim_patient_lease(&db, "0188", "instance-a").unwrap());
+        assert!(renew_leases(&db, 1, "0188", "instance-a").unwrap());
+        let leases: (String, String) = db.conn.lock().unwrap().query_row(
+            "SELECT r.sending_lease_until,p.lease_until FROM hdr9000_revisions r JOIN hdr9000_patient_leases p ON p.device_key=r.device_key AND p.ma_ho_so=r.ma_ho_so WHERE r.id=1",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(leases.0, leases.1);
+    }
+
+    #[test]
+    fn lost_or_expired_lease_cannot_transition_to_sending() {
+        let db = open_memory_for_test().unwrap();
+        test_revision(&db, 1, "lost", "2026-07-28 09:00:00", r#"{"dongTuXa":"61.0"}"#);
+        assert!(claim(&db, 1, "instance-a").unwrap());
+        assert!(claim_patient_lease(&db, "0188", "instance-a").unwrap());
+        db.conn.lock().unwrap().execute_batch(
+            "UPDATE hdr9000_revisions SET sending_lease_until=datetime('now','-1 second') WHERE id=1; UPDATE hdr9000_patient_leases SET lease_until=datetime('now','-1 second') WHERE ma_ho_so='0188';",
+        ).unwrap();
+        assert!(!renew_leases(&db, 1, "0188", "instance-a").unwrap());
+        assert!(save_request(&db, 1, 3462, r#"{"dongTuXa":"61.0"}"#, "instance-a").is_err());
+        let attempts: i64 = db.conn.lock().unwrap().query_row(
+            "SELECT attempt_count FROM hdr9000_revisions WHERE id=1", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(attempts, 0);
+    }
+
+    #[test]
+    fn index_path_snapshots_each_stable_hash_at_the_same_path() {
+        let db = open_memory_for_test().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "hdr9000-{}-{}.xml",
+            std::process::id(),
+            Local::now().timestamp_nanos_opt().unwrap_or_default(),
+        ));
+        fs::write(&path, SAMPLE.as_bytes()).unwrap();
+        assert!(matches!(index_path(&db, &path, Duration::ZERO).unwrap(), IndexOutcome::Inserted));
+        let later = SAMPLE.replace("<Far_PD_OU>61.0</Far_PD_OU>", "<Far_PD_OU>62.0</Far_PD_OU>");
+        fs::write(&path, later.as_bytes()).unwrap();
+        assert!(matches!(index_path(&db, &path, Duration::ZERO).unwrap(), IndexOutcome::Inserted));
+        let path_text = path.to_string_lossy().to_string();
+        let revisions: i64 = db.conn.lock().unwrap().query_row(
+            "SELECT COUNT(*) FROM hdr9000_revisions WHERE file_path=?1", params![path_text], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(revisions, 2);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn index_path_rejects_the_same_hash_at_another_path() {
+        let db = open_memory_for_test().unwrap();
+        let suffix = format!("{}-{}", std::process::id(), Local::now().timestamp_nanos_opt().unwrap_or_default());
+        let first = std::env::temp_dir().join(format!("0188-{suffix}.xml"));
+        let second = std::env::temp_dir().join(format!("0199-{suffix}.xml"));
+        fs::write(&first, SAMPLE.as_bytes()).unwrap();
+        fs::write(&second, SAMPLE.as_bytes()).unwrap();
+        assert!(matches!(index_path(&db, &first, Duration::ZERO).unwrap(), IndexOutcome::Inserted));
+        assert!(matches!(index_path(&db, &second, Duration::ZERO).unwrap(), IndexOutcome::Duplicate));
+        let revisions: i64 = db.conn.lock().unwrap().query_row(
+            "SELECT COUNT(*) FROM hdr9000_revisions", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(revisions, 1);
+        let _ = fs::remove_file(first);
+        let _ = fs::remove_file(second);
     }
 }
