@@ -199,6 +199,7 @@ fn migrate_hdr9000(conn: &Connection) -> Result<(), String> {
         r#"
         CREATE TABLE IF NOT EXISTS hdr9000_revisions (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          device_key TEXT NOT NULL DEFAULT 'hdr-9000',
           file_name TEXT NOT NULL,
           file_path TEXT NOT NULL,
           content_hash TEXT NOT NULL,
@@ -224,28 +225,47 @@ fn migrate_hdr9000(conn: &Connection) -> Result<(), String> {
           discovered_at TEXT NOT NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
-          UNIQUE(file_path, content_hash)
+          UNIQUE(device_key, file_path, content_hash)
         );
         CREATE INDEX IF NOT EXISTS idx_hdr9000_revisions_status_date
           ON hdr9000_revisions(status, filter_date, source_time, id);
         CREATE INDEX IF NOT EXISTS idx_hdr9000_revisions_patient
           ON hdr9000_revisions(ma_ho_so, source_time, id);
         CREATE TABLE IF NOT EXISTS hdr9000_field_versions (
+          device_key TEXT NOT NULL DEFAULT 'hdr-9000',
           ma_ho_so TEXT NOT NULL,
           field_path TEXT NOT NULL,
           revision_id INTEGER NOT NULL,
           source_time TEXT NOT NULL,
           created_at TEXT NOT NULL,
-          PRIMARY KEY (ma_ho_so, field_path)
+          PRIMARY KEY (device_key, ma_ho_so, field_path)
         );
         CREATE TABLE IF NOT EXISTS hdr9000_service_cache (
-          ma_ho_so TEXT PRIMARY KEY,
+          device_key TEXT NOT NULL DEFAULT 'hdr-9000',
+          ma_ho_so TEXT NOT NULL,
           dv_kham_id INTEGER NOT NULL,
-          updated_at TEXT NOT NULL
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (device_key, ma_ho_so)
         );
         "#,
     )
-    .map_err(|error| format!("Migration HDR-9000 thất bại: {error}"))
+    .map_err(|error| format!("Migration HDR-9000 thất bại: {error}"))?;
+
+    // Các bản cài đã nhận migration HDR-9000 trước đây được bổ sung key mới,
+    // không rebuild bảng và không làm mất audit revision hiện hữu.
+    for table in ["hdr9000_revisions", "hdr9000_field_versions", "hdr9000_service_cache"] {
+        if !table_columns(conn, table)?.iter().any(|column| column == "device_key") {
+            conn.execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN device_key TEXT NOT NULL DEFAULT 'hdr-9000';"
+            ))
+            .map_err(|error| format!("Thêm device_key HDR-9000 vào {table} thất bại: {error}"))?;
+        }
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_hdr9000_revisions_device_hash ON hdr9000_revisions(device_key, content_hash);",
+    )
+    .map_err(|error| format!("Tạo index hash HDR-9000 thất bại: {error}"))?;
+    Ok(())
 }
 
 /// DB cũ chưa có cờ tự động xử lý KR-800.

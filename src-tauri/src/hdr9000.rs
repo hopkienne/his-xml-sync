@@ -248,6 +248,7 @@ fn scan_folder(app: Option<&AppHandle>, db: &AppDb, folder: &str) -> Result<crat
     if let Some(app) = app {
         let _ = app.emit(SCAN_PROGRESS_EVENT, ScanProgress { phase: "done".into(), current: total, total, percent: 100, message: format!("HDR-9000: thêm {inserted}, bỏ qua {skipped}.") });
     }
+    app_logger::info("hdr9000", &format!("scan folder={folder} scanned={total} indexed={inserted} skipped={skipped}"));
     Ok(crate::xml_track::ScanResult {
         tracking_folder: folder.to_string(), scanned_count: total, inserted_count: inserted,
         updated_count: 0, pruned_count: 0, prune_skipped: false, tracked_count,
@@ -282,21 +283,35 @@ pub fn index_path(db: &AppDb, path: &Path, min_age: Duration) -> Result<IndexOut
     let payload = serde_json::to_string(&parsed.payload).map_err(|e| e.to_string())?;
     let status = if parsed.payload.as_object().map(|value| value.is_empty()).unwrap_or(true) { "no_supported_data" } else { "waiting" };
     let path_text = path.to_string_lossy().to_string();
+    if content_hash_seen(db, &hash)? {
+        app_logger::info("hdr9000", &format!("duplicate file={file_name} model=HDR-9000 hash={}", &hash[..12]));
+        return Ok(IndexOutcome::Duplicate);
+    }
     let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
-    let affected = conn.execute("INSERT OR IGNORE INTO hdr9000_revisions(file_name,file_path,content_hash,ma_ho_so,patient_id,filter_date,date_source,source_time,snapshot_xml,snapshot_payload,status,discovered_at,created_at,updated_at,file_size,file_modified_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,datetime('now'),datetime('now'),datetime('now'),?12,?13)",
-        params![file_name, path_text, hash, parsed.ma_ho_so, parsed.patient_id, dates.filter_date, dates.date_source, dates.source_time, bytes, payload, status, metadata.len() as i64, metadata.modified().ok().and_then(system_time_to_local)])
+    let affected = conn.execute("INSERT OR IGNORE INTO hdr9000_revisions(device_key,file_name,file_path,content_hash,ma_ho_so,patient_id,filter_date,date_source,source_time,snapshot_xml,snapshot_payload,status,discovered_at,created_at,updated_at,file_size,file_modified_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,datetime('now'),datetime('now'),datetime('now'),?13,?14)",
+        params![DEVICE_KEY, file_name, path_text, hash, parsed.ma_ho_so, parsed.patient_id, dates.filter_date, dates.date_source, dates.source_time, bytes, payload, status, metadata.len() as i64, metadata.modified().ok().and_then(system_time_to_local)])
         .map_err(|e| format!("Lưu revision HDR-9000: {e}"))?;
     if affected == 0 { return Ok(IndexOutcome::Duplicate); }
-    app_logger::info("hdr9000", &format!("indexed file={} maHoSo={} hash={} source_time={}", file_name, parsed.ma_ho_so, &hash[..12], dates.source_time));
+    app_logger::info("hdr9000", &format!("indexed model=HDR-9000 file={} maHoSo={} patientId={:?} hash={} source_time={} date_source={}", file_name, parsed.ma_ho_so, parsed.patient_id, &hash[..12], dates.source_time, dates.date_source));
     Ok(IndexOutcome::Inserted)
+}
+
+fn content_hash_seen(db: &AppDb, hash: &str) -> Result<bool, String> {
+    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM hdr9000_revisions WHERE device_key=?1 AND content_hash=?2)",
+            params![DEVICE_KEY, hash],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Kiểm tra hash HDR-9000: {e}"))
 }
 
 pub fn list_files(db: &AppDb, from: Option<&str>, to: Option<&str>) -> Result<Vec<TrackedXmlFile>, String> {
     let (Some(from), Some(to)) = (from, to) else { return Ok(Vec::new()); };
     let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
-    let mut statement = conn.prepare("SELECT id,file_name,file_path,file_size,file_modified_at,status,error_message,filter_date,updated_at FROM hdr9000_revisions WHERE filter_date BETWEEN ?1 AND ?2 ORDER BY source_time,id")
+    let mut statement = conn.prepare("SELECT id,file_name,file_path,file_size,file_modified_at,status,error_message,filter_date,updated_at FROM hdr9000_revisions WHERE device_key=?1 AND filter_date BETWEEN ?2 AND ?3 ORDER BY source_time,id")
         .map_err(|e| e.to_string())?;
-    statement.query_map(params![from, to], |row| Ok(TrackedXmlFile {
+    statement.query_map(params![DEVICE_KEY, from, to], |row| Ok(TrackedXmlFile {
         id: row.get(0)?, device_key: DEVICE_KEY.into(), file_name: row.get(1)?, file_path: row.get(2)?,
         file_size: row.get(3)?, file_modified_at: row.get(4)?, status: XmlFileStatus::parse(&row.get::<_, String>(5)?),
         error_message: row.get(6)?, created_at: row.get(7)?, updated_at: row.get(8)?,
@@ -309,7 +324,7 @@ pub fn folder_state(db: &AppDb) -> Result<DeviceFolderState, String> {
 
 pub fn count_pending(db: &AppDb) -> Result<usize, String> {
     let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
-    conn.query_row("SELECT COUNT(*) FROM hdr9000_revisions WHERE status IN ('waiting','send_error','patient_not_found','service_not_found')", [], |row| row.get::<_, i64>(0))
+    conn.query_row("SELECT COUNT(*) FROM hdr9000_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found')", params![DEVICE_KEY], |row| row.get::<_, i64>(0))
         .map(|value| value as usize).map_err(|e| e.to_string())
 }
 
@@ -388,7 +403,7 @@ pub async fn process(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState, f
 
 fn pending_range(db: &AppDb) -> Result<Option<(String, String)>, String> {
     db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?
-        .query_row("SELECT MIN(filter_date), MAX(filter_date) FROM hdr9000_revisions WHERE status IN ('waiting','send_error','patient_not_found','service_not_found')", [],
+        .query_row("SELECT MIN(filter_date), MAX(filter_date) FROM hdr9000_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found')", params![DEVICE_KEY],
             |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)))
         .map(|(from, to)| from.zip(to)).map_err(|e| e.to_string())
 }
@@ -442,45 +457,45 @@ struct Revision { id: i64, file_name: String, ma_ho_so: String, source_time: Str
 
 fn load_revision(db: &AppDb, id: i64) -> Result<Option<Revision>, String> {
     db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?
-        .query_row("SELECT id,file_name,ma_ho_so,source_time,snapshot_payload,snapshot_xml FROM hdr9000_revisions WHERE id=?1", params![id],
+        .query_row("SELECT id,file_name,ma_ho_so,source_time,snapshot_payload,snapshot_xml FROM hdr9000_revisions WHERE id=?1 AND device_key=?2", params![id, DEVICE_KEY],
             |row| Ok(Revision { id: row.get(0)?, file_name: row.get(1)?, ma_ho_so: row.get(2)?, source_time: row.get(3)?, snapshot_payload: row.get(4)?, xml: row.get(5)? }))
         .optional().map_err(|e| e.to_string())
 }
 
 fn retryable_ids(db: &AppDb, from: &str, to: &str) -> Result<Vec<i64>, String> {
     let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
-    let mut statement = conn.prepare("SELECT id FROM hdr9000_revisions WHERE status IN ('waiting','send_error','patient_not_found','service_not_found') AND filter_date BETWEEN ?1 AND ?2 ORDER BY source_time,id").map_err(|e| e.to_string())?;
-    statement.query_map(params![from, to], |row| row.get(0)).map_err(|e| e.to_string())?.collect::<Result<Vec<i64>, _>>().map_err(|e| e.to_string())
+    let mut statement = conn.prepare("SELECT id FROM hdr9000_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found') AND filter_date BETWEEN ?2 AND ?3 ORDER BY source_time,id").map_err(|e| e.to_string())?;
+    statement.query_map(params![DEVICE_KEY, from, to], |row| row.get(0)).map_err(|e| e.to_string())?.collect::<Result<Vec<i64>, _>>().map_err(|e| e.to_string())
 }
 
 fn claim(db: &AppDb, id: i64, owner: &str) -> Result<bool, String> {
     let changed = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
-        "UPDATE hdr9000_revisions SET status='processing',error_message=NULL,sending_started_at=datetime('now'),sending_owner_id=?1,sending_lease_until=datetime('now','+120 seconds'),updated_at=datetime('now') WHERE id=?2 AND status IN ('waiting','send_error','patient_not_found','service_not_found')",
-        params![owner, id]).map_err(|e| e.to_string())?;
+        "UPDATE hdr9000_revisions SET status='processing',error_message=NULL,sending_started_at=datetime('now'),sending_owner_id=?1,sending_lease_until=datetime('now','+120 seconds'),updated_at=datetime('now') WHERE id=?2 AND device_key=?3 AND status IN ('waiting','send_error','patient_not_found','service_not_found')",
+        params![owner, id, DEVICE_KEY]).map_err(|e| e.to_string())?;
     Ok(changed == 1)
 }
 
 fn save_request(db: &AppDb, id: i64, dv_kham_id: i64, body: &str, owner: &str) -> Result<(), String> {
     db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
-        "UPDATE hdr9000_revisions SET status='sending',dv_kham_id=?1,request_payload=?2,updated_at=datetime('now') WHERE id=?3 AND sending_owner_id=?4",
-        params![dv_kham_id, body, id, owner]).map(|_| ()).map_err(|e| e.to_string())
+        "UPDATE hdr9000_revisions SET status='sending',dv_kham_id=?1,request_payload=?2,attempt_count=attempt_count+1,updated_at=datetime('now') WHERE id=?3 AND sending_owner_id=?4 AND device_key=?5",
+        params![dv_kham_id, body, id, owner, DEVICE_KEY]).map(|_| ()).map_err(|e| e.to_string())
 }
 
 fn fail(db: &AppDb, id: i64, status: &str, message: &str, owner: &str) -> Result<(), String> {
     db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
-        "UPDATE hdr9000_revisions SET status=?1,error_message=?2,sending_owner_id=NULL,sending_lease_until=NULL,updated_at=datetime('now') WHERE id=?3 AND sending_owner_id=?4",
-        params![status, message, id, owner]).map(|_| ()).map_err(|e| e.to_string())
+        "UPDATE hdr9000_revisions SET status=?1,error_message=?2,sending_owner_id=NULL,sending_lease_until=NULL,updated_at=datetime('now') WHERE id=?3 AND sending_owner_id=?4 AND device_key=?5",
+        params![status, message, id, owner, DEVICE_KEY]).map(|_| ()).map_err(|e| e.to_string())
 }
 
 fn set_status(db: &AppDb, id: i64, status: &str, message: Option<&str>, owner: &str) -> Result<(), String> {
     db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
-        "UPDATE hdr9000_revisions SET status=?1,error_message=?2,sending_owner_id=NULL,sending_lease_until=NULL,processed_at=CASE WHEN ?1='superseded' THEN datetime('now') ELSE processed_at END,updated_at=datetime('now') WHERE id=?3 AND sending_owner_id=?4",
-        params![status, message, id, owner]).map(|_| ()).map_err(|e| e.to_string())
+        "UPDATE hdr9000_revisions SET status=?1,error_message=?2,sending_owner_id=NULL,sending_lease_until=NULL,processed_at=CASE WHEN ?1='superseded' THEN datetime('now') ELSE processed_at END,updated_at=datetime('now') WHERE id=?3 AND sending_owner_id=?4 AND device_key=?5",
+        params![status, message, id, owner, DEVICE_KEY]).map(|_| ()).map_err(|e| e.to_string())
 }
 
 fn recover_expired(db: &AppDb) -> Result<(), String> {
     db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
-        "UPDATE hdr9000_revisions SET status='send_error',error_message='Recovery: lease xử lý đã hết hạn.',sending_owner_id=NULL,sending_lease_until=NULL,updated_at=datetime('now') WHERE status IN ('processing','sending') AND sending_lease_until < datetime('now')", []).map(|_| ()).map_err(|e| e.to_string())
+        "UPDATE hdr9000_revisions SET status='send_error',error_message='Recovery: lease xử lý đã hết hạn.',sending_owner_id=NULL,sending_lease_until=NULL,updated_at=datetime('now') WHERE device_key=?1 AND status IN ('processing','sending') AND sending_lease_until < datetime('now')", params![DEVICE_KEY]).map(|_| ()).map_err(|e| e.to_string())
 }
 
 fn leaf_fields(value: &Value, prefix: &str, result: &mut Vec<String>) {
@@ -504,8 +519,8 @@ fn remove_stale(value: &Value, prefix: &str, revision: &Revision, db: &AppDb) ->
         }
         _ => {
             let latest: Option<(String, i64)> = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?
-                .query_row("SELECT source_time,revision_id FROM hdr9000_field_versions WHERE ma_ho_so=?1 AND field_path=?2",
-                    params![revision.ma_ho_so, prefix], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())?;
+                .query_row("SELECT source_time,revision_id FROM hdr9000_field_versions WHERE device_key=?1 AND ma_ho_so=?2 AND field_path=?3",
+                    params![DEVICE_KEY, revision.ma_ho_so, prefix], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())?;
             let stale = latest.map(|(time, id)| time > revision.source_time || (time == revision.source_time && id > revision.id)).unwrap_or(false);
             Ok(if stale { None } else { Some(value.clone()) })
         }
@@ -524,11 +539,12 @@ fn finish_success(db: &AppDb, revision: &Revision, request: &str, response: &str
     let mut conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     for field in fields {
-        tx.execute("INSERT INTO hdr9000_field_versions(ma_ho_so,field_path,revision_id,source_time,created_at) VALUES(?1,?2,?3,?4,datetime('now')) ON CONFLICT(ma_ho_so,field_path) DO UPDATE SET revision_id=excluded.revision_id,source_time=excluded.source_time,created_at=excluded.created_at",
-            params![revision.ma_ho_so, field, revision.id, revision.source_time]).map_err(|e| e.to_string())?;
+        tx.execute("INSERT INTO hdr9000_field_versions(device_key,ma_ho_so,field_path,revision_id,source_time,created_at) VALUES(?1,?2,?3,?4,?5,datetime('now')) ON CONFLICT DO UPDATE SET revision_id=excluded.revision_id,source_time=excluded.source_time,created_at=excluded.created_at",
+            params![DEVICE_KEY, revision.ma_ho_so, field, revision.id, revision.source_time]).map_err(|e| e.to_string())?;
     }
-    tx.execute("UPDATE hdr9000_revisions SET status='processed',response_payload=?1,processed_at=datetime('now'),sending_owner_id=NULL,sending_lease_until=NULL,updated_at=datetime('now') WHERE id=?2 AND sending_owner_id=?3",
-        params![response, revision.id, owner]).map_err(|e| e.to_string())?;
+    let changed = tx.execute("UPDATE hdr9000_revisions SET status='processed',response_payload=?1,processed_at=datetime('now'),sending_owner_id=NULL,sending_lease_until=NULL,updated_at=datetime('now') WHERE id=?2 AND sending_owner_id=?3 AND device_key=?4",
+        params![response, revision.id, owner, DEVICE_KEY]).map_err(|e| e.to_string())?;
+    if changed != 1 { return Err("Không thể hoàn tất revision HDR-9000: lease không còn hợp lệ.".into()); }
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -542,7 +558,7 @@ async fn token(db: &AppDb, state: &Hdr9000ProcessState) -> Result<String, String
 
 async fn resolve_service_id(db: &AppDb, state: &Hdr9000ProcessState, client: &Client, settings: &AppSettings, ma_ho_so: &str) -> Result<i64, String> {
     if let Some(id) = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?
-        .query_row("SELECT dv_kham_id FROM hdr9000_service_cache WHERE ma_ho_so=?1", params![ma_ho_so], |row| row.get(0)).optional().map_err(|e| e.to_string())? { return Ok(id); }
+        .query_row("SELECT dv_kham_id FROM hdr9000_service_cache WHERE device_key=?1 AND ma_ho_so=?2", params![DEVICE_KEY, ma_ho_so], |row| row.get(0)).optional().map_err(|e| e.to_string())? { return Ok(id); }
     let auth = token(db, state).await?;
     let patient_url = his_api::join_url(&settings.his_api_url, PATIENT_PATH);
     let patient_body = client.get(&patient_url).bearer_auth(&auth).query(&[("maHoSo", ma_ho_so), ("page", "0"), ("size", "50")]).send().await
@@ -556,12 +572,19 @@ async fn resolve_service_id(db: &AppDb, state: &Hdr9000ProcessState, client: &Cl
     let summary: Value = serde_json::from_str(&body).map_err(|e| format!("service_not_found: Response tổng hợp không hợp lệ: {e}"))?;
     let id = summary.pointer("/data/dsDvKham").and_then(Value::as_array).and_then(|rows| rows.first()).and_then(|row| row.get("id")).and_then(Value::as_i64)
         .ok_or_else(|| "service_not_found: dsDvKham rỗng.".to_string())?;
-    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute("INSERT INTO hdr9000_service_cache(ma_ho_so,dv_kham_id,updated_at) VALUES(?1,?2,datetime('now')) ON CONFLICT(ma_ho_so) DO UPDATE SET dv_kham_id=excluded.dv_kham_id,updated_at=excluded.updated_at", params![ma_ho_so, id]).map_err(|e| e.to_string())?;
+    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute("INSERT INTO hdr9000_service_cache(device_key,ma_ho_so,dv_kham_id,updated_at) VALUES(?1,?2,?3,datetime('now')) ON CONFLICT DO UPDATE SET dv_kham_id=excluded.dv_kham_id,updated_at=excluded.updated_at", params![DEVICE_KEY, ma_ho_so, id]).map_err(|e| e.to_string())?;
     Ok(id)
 }
 
 fn clear_service_cache(db: &AppDb, ma_ho_so: &str) -> Result<(), String> {
-    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute("DELETE FROM hdr9000_service_cache WHERE ma_ho_so=?1", params![ma_ho_so]).map(|_| ()).map_err(|e| e.to_string())
+    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute("DELETE FROM hdr9000_service_cache WHERE device_key=?1 AND ma_ho_so=?2", params![DEVICE_KEY, ma_ho_so]).map(|_| ()).map_err(|e| e.to_string())
+}
+
+fn save_response(db: &AppDb, id: i64, response: &str, owner: &str) -> Result<(), String> {
+    db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
+        "UPDATE hdr9000_revisions SET response_payload=?1,updated_at=datetime('now') WHERE id=?2 AND sending_owner_id=?3 AND device_key=?4",
+        params![response, id, owner, DEVICE_KEY],
+    ).map(|_| ()).map_err(|e| e.to_string())
 }
 
 async fn send_update(db: &AppDb, state: &Hdr9000ProcessState, client: &Client, settings: &AppSettings, dv_kham_id: i64, payload: &Value, id: i64) -> Result<String, String> {
@@ -573,8 +596,9 @@ async fn send_update(db: &AppDb, state: &Hdr9000ProcessState, client: &Client, s
     let body = response.text().await.map_err(|e| format!("send_error: Đọc HIS response: {e}"))?;
     app_logger::info("hdr9000", &format!("revision_id={id} HIS status={status} response={}", body.chars().take(16000).collect::<String>()));
     if status.is_success() { return Ok(body); }
-    fail(db, id, "send_error", &format!("HIS trả về {status}: {}", body.chars().take(500).collect::<String>()), &state.instance_id)?;
-    Err(format!("send_error: HIS trả về {status}"))
+    // Giữ lease để nhánh invalid-service có thể resolve lại một lần và persist kết quả cuối.
+    save_response(db, id, &body, &state.instance_id)?;
+    Err(format!("send_error: HIS trả về {status}: {}", body.chars().take(500).collect::<String>()))
 }
 
 fn is_invalid_service(error: &str) -> bool {
@@ -582,7 +606,7 @@ fn is_invalid_service(error: &str) -> bool {
 }
 
 fn emit_file(app: &AppHandle, db: &AppDb, id: i64) {
-    let record = db.conn.lock().ok().and_then(|conn| conn.query_row("SELECT id,file_name,file_path,file_size,file_modified_at,status,error_message,filter_date,updated_at FROM hdr9000_revisions WHERE id=?1", params![id], |row| Ok(TrackedXmlFile {
+    let record = db.conn.lock().ok().and_then(|conn| conn.query_row("SELECT id,file_name,file_path,file_size,file_modified_at,status,error_message,filter_date,updated_at FROM hdr9000_revisions WHERE id=?1 AND device_key=?2", params![id, DEVICE_KEY], |row| Ok(TrackedXmlFile {
         id: row.get(0)?, device_key: DEVICE_KEY.into(), file_name: row.get(1)?, file_path: row.get(2)?, file_size: row.get(3)?, file_modified_at: row.get(4)?,
         status: XmlFileStatus::parse(&row.get::<_, String>(5)?), error_message: row.get(6)?, created_at: row.get(7)?, updated_at: row.get(8)?,
     })).optional().ok().flatten());
@@ -608,6 +632,15 @@ mod tests {
         assert!(matches!(parse_hdr9000_xml(b"<x><Product_Model>KR-800</Product_Model></x>", "a.xml"), Err(Hdr9000ParseError::WrongModel(_))));
         let parsed = parse_hdr9000_xml(b"<x><Product_Model>HDR-9000</Product_Model></x>", "a.xml").unwrap();
         assert_eq!(parsed.payload, serde_json::json!({}));
+    }
+
+    #[test]
+    fn later_file_serializes_only_its_populated_fields() {
+        let xml = b"<x><Product_Model>HDR-9000</Product_Model><Final_Prescription_Data_FAR_ADD-Right>1.50</Final_Prescription_Data_FAR_ADD-Right><Near_PD_OU>58.0</Near_PD_OU></x>";
+        let parsed = parse_hdr9000_xml(xml, "0188.xml").unwrap();
+        assert_eq!(parsed.payload, serde_json::json!({"matPhaiCapKinhNhinGan":{"donViAddId":1.5},"dongTuGan":"58.0"}));
+        assert!(parsed.payload.get("matPhaiKinhMoi").is_none());
+        assert!(!parsed.payload.to_string().contains("null"));
     }
 
     #[test]
@@ -639,6 +672,14 @@ mod tests {
     }
 
     #[test]
+    fn same_hash_at_another_path_is_not_eligible_for_a_second_send() {
+        let db = open_memory_for_test().unwrap();
+        test_revision(&db, 1, "same-content", "2026-07-28 09:00:00", "{}");
+        assert!(content_hash_seen(&db, "same-content").unwrap());
+        assert!(!content_hash_seen(&db, "different-content").unwrap());
+    }
+
+    #[test]
     fn stale_retry_keeps_only_fields_not_sent_by_newer_revision() {
         let db = open_memory_for_test().unwrap();
         test_revision(&db, 1, "old", "2026-07-28 09:00:00", r#"{"matPhaiKinhMoi":{"sphId":-2.5,"cylId":-0.75}}"#);
@@ -654,5 +695,21 @@ mod tests {
         db.conn.lock().unwrap().execute("INSERT INTO hdr9000_service_cache(ma_ho_so,dv_kham_id,updated_at) VALUES('0188',3462,datetime('now'))", []).unwrap();
         let value: i64 = db.conn.lock().unwrap().query_row("SELECT dv_kham_id FROM hdr9000_service_cache WHERE ma_ho_so='0188'", [], |row| row.get(0)).unwrap();
         assert_eq!(value, 3462);
+    }
+
+    #[test]
+    fn failed_response_keeps_lease_for_single_service_retry_and_counts_attempts() {
+        let db = open_memory_for_test().unwrap();
+        test_revision(&db, 1, "retry", "2026-07-28 09:00:00", r#"{"dongTuXa":"61.0"}"#);
+        assert!(claim(&db, 1, "owner").unwrap());
+        save_request(&db, 1, 3462, r#"{"dongTuXa":"61.0"}"#, "owner").unwrap();
+        save_response(&db, 1, "service no longer valid", "owner").unwrap();
+        let row: (String, i64) = db.conn.lock().unwrap().query_row("SELECT sending_owner_id,attempt_count FROM hdr9000_revisions WHERE id=1", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        assert_eq!(row.0, "owner");
+        assert_eq!(row.1, 1);
+        let revision = load_revision(&db, 1).unwrap().unwrap();
+        finish_success(&db, &revision, r#"{"dongTuXa":"61.0"}"#, "{}", "owner").unwrap();
+        let status: String = db.conn.lock().unwrap().query_row("SELECT status FROM hdr9000_revisions WHERE id=1", [], |row| row.get(0)).unwrap();
+        assert_eq!(status, "processed");
     }
 }
