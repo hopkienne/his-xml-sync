@@ -93,6 +93,12 @@ pub enum XmlFileStatus {
     PairingError,
     /// Lần đo thừa sau khi đã có cặp.
     ExtraMeasurement,
+    /// HDR-9000: hash giống revision đã index, không gửi lại HIS.
+    Duplicate,
+    /// HDR-9000: XML hợp lệ nhưng không có tag payload được hỗ trợ.
+    NoSupportedData,
+    /// HDR-9000: mọi field đã được revision mới hơn gửi thành công.
+    Superseded,
 }
 
 impl XmlFileStatus {
@@ -115,6 +121,9 @@ impl XmlFileStatus {
             "pairing" => Self::Pairing,
             "pairing_error" => Self::PairingError,
             "extra_measurement" => Self::ExtraMeasurement,
+            "duplicate" => Self::Duplicate,
+            "no_supported_data" => Self::NoSupportedData,
+            "superseded" => Self::Superseded,
             _ => Self::Waiting,
         }
     }

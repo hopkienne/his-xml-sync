@@ -4,6 +4,7 @@ use crate::{
     folder_watch,
     his_api::{self, HisAuthStatus},
     kr800_process::{self, Kr800ProcessState, PatientListSnapshot, ProcessResult},
+    hdr9000::{self, Hdr9000ProcessState, Hdr9000ProcessResult},
     license::{self, LicenseInfo, LicenseStatus},
     settings::{self, AppSettings},
     sync::{self, SyncSummary},
@@ -258,7 +259,11 @@ pub async fn set_auto_process_enabled(
             .map(|f| !f.trim().is_empty())
             .unwrap_or(false)
         {
-            folder_watch::trigger_auto_process_now(&app).await;
+            if device_key == "hdr-9000" {
+                hdr9000::trigger_auto_process_now(&app).await;
+            } else {
+                folder_watch::trigger_auto_process_now(&app).await;
+            }
         } else {
             app_logger::info(
                 "xml_track",
@@ -281,13 +286,22 @@ pub fn set_tracking_folder_and_scan(
         "xml_track",
         &format!("set_tracking_folder_and_scan device={device_key} folder={folder}"),
     );
-    match xml_track::set_tracking_folder_and_scan(Some(&app), &db, &device_key, &folder) {
+    let result = match device_key.as_str() {
+        "kr-800" => xml_track::set_tracking_folder_and_scan(Some(&app), &db, &device_key, &folder),
+        "hdr-9000" => hdr9000::set_tracking_folder_and_scan(Some(&app), &db, &folder),
+        _ => Err(format!("Thiết bị chưa được hỗ trợ: {device_key}")),
+    };
+    match result {
         Ok(result) => {
             // Nếu user đã bật tự xử lý: kick pipeline sau khi có folder (không chờ poll).
             if xml_track::is_auto_process_enabled(&db, &device_key) {
                 let app_clone = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    folder_watch::trigger_auto_process_now(&app_clone).await;
+                    if device_key == "hdr-9000" {
+                        hdr9000::trigger_auto_process_now(&app_clone).await;
+                    } else {
+                        folder_watch::trigger_auto_process_now(&app_clone).await;
+                    }
                 });
             }
             app_logger::info(
@@ -324,7 +338,12 @@ pub fn rescan_tracking_folder(
         "xml_track",
         &format!("rescan_tracking_folder device={device_key}"),
     );
-    match xml_track::rescan_tracking_folder(Some(&app), &db, &device_key) {
+    let result = match device_key.as_str() {
+        "kr-800" => xml_track::rescan_tracking_folder(Some(&app), &db, &device_key),
+        "hdr-9000" => hdr9000::rescan_tracking_folder(Some(&app), &db),
+        _ => Err(format!("Thiết bị chưa được hỗ trợ: {device_key}")),
+    };
+    match result {
         Ok(result) => {
             app_logger::info(
                 "xml_track",
@@ -366,12 +385,12 @@ pub fn list_xml_files(
             from_time, to_time
         ),
     );
-    match xml_track::list_xml_files(
-        &db,
-        &device_key,
-        from_time.as_deref(),
-        to_time.as_deref(),
-    ) {
+    let result = match device_key.as_str() {
+        "kr-800" => xml_track::list_xml_files(&db, &device_key, from_time.as_deref(), to_time.as_deref()),
+        "hdr-9000" => hdr9000::list_files(&db, from_time.as_deref(), to_time.as_deref()),
+        _ => Err(format!("Thiết bị chưa được hỗ trợ: {device_key}")),
+    };
+    match result {
         Ok(files) => {
             app_logger::info(
                 "xml_track",
@@ -425,6 +444,21 @@ pub async fn process_kr800(
         Err(error) => app_logger::error("kr800", &format!("process failed: {error}")),
     }
     result
+}
+
+#[tauri::command]
+pub async fn process_hdr9000(
+    app: AppHandle,
+    db: State<'_, AppDb>,
+    process_state: State<'_, Hdr9000ProcessState>,
+    device_key: String,
+    from_time: String,
+    to_time: String,
+) -> Result<Hdr9000ProcessResult, String> {
+    if device_key != "hdr-9000" {
+        return Err(format!("Thiết bị chưa được hỗ trợ: {device_key}"));
+    }
+    hdr9000::process(&app, &db, &process_state, &from_time, &to_time).await
 }
 
 #[tauri::command]

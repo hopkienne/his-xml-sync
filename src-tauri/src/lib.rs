@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod folder_watch;
 mod his_api;
+mod hdr9000;
 mod kr800_process;
 mod license;
 pub mod license_core;
@@ -45,8 +46,10 @@ pub fn run() {
             );
             app.manage(database);
             app.manage(kr800_process::Kr800ProcessState::default());
+            app.manage(hdr9000::Hdr9000ProcessState::default());
             // Tự quét nền folder tracking + tự xử lý file waiting.
             folder_watch::start(app.handle().clone());
+            hdr9000::start_watch(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -79,7 +82,8 @@ pub fn run() {
             commands::login_his,
             commands::get_auth_status,
             commands::get_last_patient_list,
-            commands::process_kr800
+            commands::process_kr800,
+            commands::process_hdr9000
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -30,6 +30,7 @@ export const fallbackSettings: AppSettings = {
 };
 
 export const KR800_DEVICE_KEY = "kr-800";
+export const HDR9000_DEVICE_KEY = "hdr-9000";
 
 export async function getSettings(): Promise<AppSettings> {
   try {
@@ -223,6 +224,25 @@ export async function processKr800(
   });
 }
 
+export type Hdr9000ProcessResult = {
+  total: number;
+  processed: number;
+  failed: number;
+  skipped: number;
+  files: TrackedXmlFile[];
+};
+
+export async function processHdr9000(
+  fromTime: string,
+  toTime: string,
+): Promise<Hdr9000ProcessResult> {
+  return await invoke<Hdr9000ProcessResult>("process_hdr9000", {
+    deviceKey: HDR9000_DEVICE_KEY,
+    fromTime,
+    toTime,
+  });
+}
+
 /**
  * JSON danh sách người bệnh lần gọi API thành công gần nhất trong phiên app.
  * `null` nếu chưa gọi thành công kể từ khi mở app.
@@ -236,12 +256,12 @@ export async function getLastPatientList(): Promise<PatientListSnapshot | null> 
 }
 
 /** Mở native folder picker; trả về path hoặc null nếu hủy. */
-export async function pickTrackingFolder(): Promise<string | null> {
+export async function pickTrackingFolder(deviceLabel: string = "TOPCON KR-800"): Promise<string | null> {
   try {
     const selected = await open({
       directory: true,
       multiple: false,
-      title: "Chọn thư mục tracking XML (TOPCON KR-800)",
+      title: `Chọn thư mục tracking XML (${deviceLabel})`,
     });
     if (typeof selected === "string" && selected.length > 0) {
       return selected;

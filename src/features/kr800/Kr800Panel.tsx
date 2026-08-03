@@ -74,6 +74,9 @@ const statusLabel: Record<TrackedXmlStatus, string> = {
   pairing: "Đang ghép cặp",
   pairing_error: "Lỗi ghép cặp",
   extra_measurement: "Phát hiện lần đo thừa",
+  duplicate: "Trùng nội dung",
+  no_supported_data: "Không có dữ liệu hỗ trợ",
+  superseded: "Đã bị revision mới hơn thay thế",
 };
 
 export function Kr800Panel({

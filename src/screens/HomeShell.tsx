@@ -11,6 +11,7 @@ import {
   toHisApiDateTime,
   type Kr800ProcessPhase,
 } from "../features/kr800/Kr800Panel";
+import { Hdr9000Panel } from "../features/hdr9000/Hdr9000Panel";
 import { HisSettingsPanel } from "../features/settings/HisSettingsPanel";
 import {
   exportAppLogs,
@@ -54,6 +55,12 @@ const sidebarItems: SidebarNavItem[] = [
     key: "kr-800",
     label: "KR-800",
     description: "Máy đo khúc xạ TOPCON KR-800 — theo dõi folder XML và trạng thái file",
+    section: "device",
+  },
+  {
+    key: "hdr-9000",
+    label: "HDR-9000",
+    description: "Theo dõi XML HDR-9000, revision và trạng thái gửi HIS",
     section: "device",
   },
   {
@@ -679,6 +686,8 @@ export function HomeShell({ session, onLogout }: HomeShellProps) {
               autostartStatus={autostartStatus}
               onAutostartChange={(enabled) => void handleAutostartChange(enabled)}
             />
+          ) : activeNav === "hdr-9000" ? (
+            <Hdr9000Panel />
           ) : (
             <Kr800Panel
               trackingFolder={trackingFolder}

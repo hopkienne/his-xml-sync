@@ -1,8 +1,8 @@
 /** Mục điều hướng chính trên sidebar. */
-export type SidebarNavKey = "kr-800" | "settings";
+export type SidebarNavKey = "kr-800" | "hdr-9000" | "settings";
 
 /** Máy đo trên sidebar (có thể mở rộng thêm model khác sau này). */
-export type DeviceMenuKey = Extract<SidebarNavKey, "kr-800">;
+export type DeviceMenuKey = Extract<SidebarNavKey, "kr-800" | "hdr-9000">;
 
 export type DeviceMenuItem = {
   key: DeviceMenuKey;
@@ -87,7 +87,10 @@ export type TrackedXmlStatus =
   | "awaiting_pair"
   | "pairing"
   | "pairing_error"
-  | "extra_measurement";
+  | "extra_measurement"
+  | "duplicate"
+  | "no_supported_data"
+  | "superseded";
 
 export type TrackedXmlFile = {
   id: number;

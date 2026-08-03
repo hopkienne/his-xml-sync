@@ -187,8 +187,65 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     migrate_measurement_pairs_dv_kham_id(conn)?;
     migrate_xml_files_file_send_schema(conn)?;
     normalize_legacy_pair_orders(conn)?;
+    migrate_hdr9000(conn)?;
 
     Ok(())
+}
+
+/// HDR-9000 có revision độc lập: cùng đường dẫn nhưng hash mới là một lần gửi mới.
+/// Các bảng này không sửa dữ liệu hay workflow pairing của KR-800.
+fn migrate_hdr9000(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS hdr9000_revisions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          file_name TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          ma_ho_so TEXT NOT NULL,
+          patient_id TEXT,
+          filter_date TEXT NOT NULL,
+          date_source TEXT NOT NULL,
+          source_time TEXT NOT NULL,
+          snapshot_xml BLOB NOT NULL,
+          snapshot_payload TEXT NOT NULL,
+          file_size INTEGER,
+          file_modified_at TEXT,
+          dv_kham_id INTEGER,
+          status TEXT NOT NULL DEFAULT 'waiting',
+          error_message TEXT,
+          request_payload TEXT,
+          response_payload TEXT,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          sending_started_at TEXT,
+          sending_owner_id TEXT,
+          sending_lease_until TEXT,
+          processed_at TEXT,
+          discovered_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(file_path, content_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_hdr9000_revisions_status_date
+          ON hdr9000_revisions(status, filter_date, source_time, id);
+        CREATE INDEX IF NOT EXISTS idx_hdr9000_revisions_patient
+          ON hdr9000_revisions(ma_ho_so, source_time, id);
+        CREATE TABLE IF NOT EXISTS hdr9000_field_versions (
+          ma_ho_so TEXT NOT NULL,
+          field_path TEXT NOT NULL,
+          revision_id INTEGER NOT NULL,
+          source_time TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (ma_ho_so, field_path)
+        );
+        CREATE TABLE IF NOT EXISTS hdr9000_service_cache (
+          ma_ho_so TEXT PRIMARY KEY,
+          dv_kham_id INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        "#,
+    )
+    .map_err(|error| format!("Migration HDR-9000 thất bại: {error}"))
 }
 
 /// DB cũ chưa có cờ tự động xử lý KR-800.
