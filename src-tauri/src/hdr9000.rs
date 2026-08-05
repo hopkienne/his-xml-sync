@@ -365,11 +365,12 @@ pub fn list_files(db: &AppDb, from: Option<&str>, to: Option<&str>) -> Result<Ve
     let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
     let mut statement = conn.prepare("SELECT id,file_name,file_path,file_size,file_modified_at,status,error_message,filter_date,updated_at FROM hdr9000_revisions WHERE device_key=?1 AND filter_date BETWEEN ?2 AND ?3 ORDER BY source_time,id")
         .map_err(|e| e.to_string())?;
-    statement.query_map(params![DEVICE_KEY, from, to], |row| Ok(TrackedXmlFile {
+    let files = statement.query_map(params![DEVICE_KEY, from, to], |row| Ok(TrackedXmlFile {
         id: row.get(0)?, device_key: DEVICE_KEY.into(), file_name: row.get(1)?, file_path: row.get(2)?,
         file_size: row.get(3)?, file_modified_at: row.get(4)?, status: XmlFileStatus::parse(&row.get::<_, String>(5)?),
         error_message: row.get(6)?, created_at: row.get(7)?, updated_at: row.get(8)?,
-    })).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    })).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string());
+    files
 }
 
 pub fn folder_state(db: &AppDb) -> Result<DeviceFolderState, String> {
@@ -757,7 +758,8 @@ fn load_revision(db: &AppDb, id: i64) -> Result<Option<Revision>, String> {
 fn retryable_ids(db: &AppDb, from: &str, to: &str) -> Result<Vec<i64>, String> {
     let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
     let mut statement = conn.prepare("SELECT id FROM hdr9000_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found') AND filter_date BETWEEN ?2 AND ?3 ORDER BY source_time,id").map_err(|e| e.to_string())?;
-    statement.query_map(params![DEVICE_KEY, from, to], |row| row.get(0)).map_err(|e| e.to_string())?.collect::<Result<Vec<i64>, _>>().map_err(|e| e.to_string())
+    let ids = statement.query_map(params![DEVICE_KEY, from, to], |row| row.get(0)).map_err(|e| e.to_string())?.collect::<Result<Vec<i64>, _>>().map_err(|e| e.to_string());
+    ids
 }
 
 fn claim(db: &AppDb, id: i64, owner: &str) -> Result<bool, String> {

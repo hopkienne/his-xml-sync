@@ -730,7 +730,7 @@ pub fn list_files(
         .lock()
         .map_err(|_| "Không khóa được SQLite.".to_string())?;
     let mut stmt = conn.prepare("SELECT id,file_name,file_path,file_size,file_modified_at,status,error_message,filter_date,updated_at FROM ct800_revisions WHERE device_key=?1 AND filter_date BETWEEN ?2 AND ?3 ORDER BY source_time,id").map_err(|e| e.to_string())?;
-    stmt.query_map(params![DEVICE_KEY, from, to], |r| {
+    let files = stmt.query_map(params![DEVICE_KEY, from, to], |r| {
         Ok(TrackedXmlFile {
             id: r.get(0)?,
             device_key: DEVICE_KEY.into(),
@@ -746,7 +746,8 @@ pub fn list_files(
     })
     .map_err(|e| e.to_string())?
     .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string());
+    files
 }
 
 pub fn revision_detail(db: &AppDb, id: i64) -> Result<Ct800RevisionDetail, String> {
@@ -796,7 +797,7 @@ pub fn start_watch(app: AppHandle) {
         tokio::time::sleep(Duration::from_secs(2)).await;
         let (tx, mut rx) = mpsc::unbounded_channel::<PathBuf>();
         let mut watched: Option<String> = None;
-        let mut watcher: Option<RecommendedWatcher> = None;
+        let mut watcher: Option<RecommendedWatcher>;
         loop {
             let folder = configured_folder(&app);
             if folder != watched {
@@ -1068,10 +1069,11 @@ fn retryable_ids(db: &AppDb, from: &str, to: &str) -> Result<Vec<i64>, String> {
         .lock()
         .map_err(|_| "Không khóa được SQLite.".to_string())?;
     let mut stmt=conn.prepare("SELECT id FROM ct800_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found','mapping_error') AND filter_date BETWEEN ?2 AND ?3 ORDER BY source_time,id").map_err(|e|e.to_string())?;
-    stmt.query_map(params![DEVICE_KEY, from, to], |r| r.get(0))
+    let ids = stmt.query_map(params![DEVICE_KEY, from, to], |r| r.get(0))
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    ids
 }
 struct Revision {
     id: i64,
@@ -1380,8 +1382,10 @@ fn finish_success(
         .lock()
         .map_err(|_| "Không khóa được SQLite.".to_string())?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-    for field in p.as_object().into_iter().flatten().keys() {
-        tx.execute("INSERT INTO ct800_field_versions(device_key,ma_ho_so,field_path,revision_id,source_time,created_at) VALUES(?1,?2,?3,?4,?5,datetime('now')) ON CONFLICT(device_key,ma_ho_so,field_path) DO UPDATE SET revision_id=excluded.revision_id,source_time=excluded.source_time,created_at=excluded.created_at WHERE excluded.source_time>ct800_field_versions.source_time OR (excluded.source_time=ct800_field_versions.source_time AND excluded.revision_id>ct800_field_versions.revision_id)",params![DEVICE_KEY,r.ma,field,r.id,r.time]).map_err(|e|e.to_string())?;
+    if let Some(payload) = p.as_object() {
+        for field in payload.keys() {
+            tx.execute("INSERT INTO ct800_field_versions(device_key,ma_ho_so,field_path,revision_id,source_time,created_at) VALUES(?1,?2,?3,?4,?5,datetime('now')) ON CONFLICT(device_key,ma_ho_so,field_path) DO UPDATE SET revision_id=excluded.revision_id,source_time=excluded.source_time,created_at=excluded.created_at WHERE excluded.source_time>ct800_field_versions.source_time OR (excluded.source_time=ct800_field_versions.source_time AND excluded.revision_id>ct800_field_versions.revision_id)",params![DEVICE_KEY,r.ma,field,r.id,r.time]).map_err(|e|e.to_string())?;
+        }
     }
     let n=tx.execute("UPDATE ct800_revisions SET status='processed',response_payload=?1,processed_at=datetime('now'),sending_started_at=NULL,sending_owner_id=NULL,sending_lease_until=NULL,updated_at=datetime('now') WHERE id=?2 AND device_key=?3 AND sending_owner_id=?4 AND sending_lease_until>datetime('now')",params![response,r.id,DEVICE_KEY,owner]).map_err(|e|e.to_string())?;
     if n != 1 {
