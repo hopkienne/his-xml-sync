@@ -89,7 +89,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
                                  'sending', 'processed', 'patient_not_found', 'treatment_ambiguous',
                                  'xml_error', 'mapping_error', 'send_error', 'failed',
                                  'awaiting_pair', 'pairing', 'pairing_error', 'extra_measurement',
-                                 'service_not_found'
+                                 'service_not_found', 'invalid_filename'
                                )),
           error_message      TEXT,
           content_hash       TEXT,
@@ -812,6 +812,7 @@ fn migrate_xml_files_file_send_schema(conn: &Connection) -> Result<(), String> {
     let required = ["dv_kham_id", "sending_started_at", "sending_owner_id", "sending_lease_until"];
     if required.iter().all(|name| columns.iter().any(|column| column == name))
         && schema.contains("service_not_found")
+        && schema.contains("invalid_filename")
     {
         return Ok(());
     }
@@ -828,7 +829,7 @@ fn migrate_xml_files_file_send_schema(conn: &Connection) -> Result<(), String> {
             'waiting', 'processing', 'parsed', 'patient_matched', 'mapped', 'sending',
             'processed', 'patient_not_found', 'treatment_ambiguous', 'xml_error',
             'mapping_error', 'send_error', 'failed', 'awaiting_pair', 'pairing',
-            'pairing_error', 'extra_measurement', 'service_not_found'
+            'pairing_error', 'extra_measurement', 'service_not_found', 'invalid_filename'
           )),
           error_message TEXT, content_hash TEXT, patient_code TEXT, patient_no INTEGER,
           measured_at TEXT, pair_id INTEGER, pair_order INTEGER, measurement_snapshot TEXT,
@@ -840,12 +841,14 @@ fn migrate_xml_files_file_send_schema(conn: &Connection) -> Result<(), String> {
         INSERT INTO xml_files_file_send_migrated (
           id, device_key, file_name, file_path, file_size, file_modified_at, status,
           error_message, content_hash, patient_code, patient_no, measured_at, pair_id,
-          pair_order, measurement_snapshot, nb_dot_dieu_tri_id, request_payload,
-          response_payload, processed_at, attempt_count, created_at, updated_at
+          pair_order, measurement_snapshot, nb_dot_dieu_tri_id, dv_kham_id, request_payload,
+          response_payload, processed_at, attempt_count, sending_started_at, sending_owner_id,
+          sending_lease_until, created_at, updated_at
         ) SELECT id, device_key, file_name, file_path, file_size, file_modified_at, status,
           error_message, content_hash, patient_code, patient_no, measured_at, pair_id,
-          pair_order, measurement_snapshot, nb_dot_dieu_tri_id, request_payload,
-          response_payload, processed_at, attempt_count, created_at, updated_at
+          pair_order, measurement_snapshot, nb_dot_dieu_tri_id, dv_kham_id, request_payload,
+          response_payload, processed_at, attempt_count, sending_started_at, sending_owner_id,
+          sending_lease_until, created_at, updated_at
           FROM xml_files;
         DROP TABLE xml_files;
         ALTER TABLE xml_files_file_send_migrated RENAME TO xml_files;

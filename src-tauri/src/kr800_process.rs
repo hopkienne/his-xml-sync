@@ -171,6 +171,7 @@ struct ServiceVisit { id: i64, nb_dot_dieu_tri_id: Option<i64> }
 
 struct WorkFile {
     id: i64,
+    file_name: String,
     path: String,
 }
 
@@ -247,6 +248,14 @@ async fn process_inner(
             app_logger::error("kr800", &format!("recover_expired_sending failed: {error}"));
             return Err(error);
         }
+    }
+
+    match measurement_pair::reconcile_pending_patient_codes(db) {
+        Ok(result) if result.reconciled_files > 0 || result.invalid_files > 0 => app_logger::info("kr800", &format!(
+            "reconcile_filename_patient_codes reconciled_files={} invalid_files={}", result.reconciled_files, result.invalid_files
+        )),
+        Ok(_) => {}
+        Err(error) => return Err(error),
     }
 
     let settings = settings::load(db)?;
@@ -377,6 +386,8 @@ async fn process_claimed_file(
     catalog: &Catalog,
     file: &WorkFile,
 ) -> Result<FileOutcome, (&'static str, String)> {
+    let filename_meta = xml_track::parse_kr800_filename(&file.file_name)
+        .map_err(|error| ("invalid_filename", error))?;
     let bytes = tokio::fs::read(&file.path)
         .await
         .map_err(|error| ("xml_error", format!("Không đọc được XML: {error}")))?;
@@ -404,7 +415,13 @@ async fn process_claimed_file(
     }
 
     let parsed = xml_parser::parse_measurement(&bytes).map_err(|error| ("xml_error", error))?;
-    let meta = measurement_pair::meta_from_parsed(file.id, &parsed, &hash);
+    app_logger::info("kr800", &format!("file_id={} file_name={} ma_ho_so_from_filename={} xml_patient_id={}", file.id, file.file_name, filename_meta.ma_ho_so, parsed.xml_patient_id.as_deref().unwrap_or("<missing>")));
+    if let Some(xml_patient_id) = parsed.xml_patient_id.as_deref() {
+        if measurement_pair::normalize_patient_code(xml_patient_id) != measurement_pair::normalize_patient_code(&filename_meta.ma_ho_so) {
+            app_logger::warn("kr800", &format!("KR-800 patient identifier mismatch: file_id={} maHoSoFromFilename={} xmlPatientId={} using=filename", file.id, filename_meta.ma_ho_so, xml_patient_id));
+        }
+    }
+    let meta = measurement_pair::meta_from_parsed(file.id, &parsed, &hash, filename_meta.ma_ho_so);
     measurement_pair::save_measurement_meta(db, &meta, &parsed)
         .map_err(|error| ("xml_error", error))?;
     set_stage(db, file.id, "parsed").map_err(|error| ("xml_error", error))?;
@@ -531,8 +548,11 @@ async fn send_measurement_file(
             None => {
                 let (from, to) = measurement_query_range_for_measurement(&expected.measured_at)?;
                 let index = patient_index(app, db, state, client, settings, &from, &to).await?;
-                match_treatment_in_range(&index, &pair.patient_code, Some((&from, &to)))
-                    .map_err(|(status, e)| format!("{status}: {e}"))?
+                match match_treatment_in_range(&index, &pair.patient_code, Some((&from, &to))) {
+                    Ok(id) => id,
+                    Err((status, message)) if status == "patient_not_found" => return Err(format!("{status}: {message} (source=filename, xmlPatientId={})", snapshot.xml_patient_id.as_deref().unwrap_or("<missing>"))),
+                    Err((status, message)) => return Err(format!("{status}: {message}")),
+                }
             }
         };
         let dv_id = match pair.dv_kham_id.or(file.dv_kham_id) {
@@ -1584,7 +1604,7 @@ fn waiting_files(db: &AppDb, from_time: &str, to_time: &str) -> Result<Vec<WorkF
     let mut statement = conn
         .prepare(
             r#"
-            SELECT id, file_path FROM xml_files
+            SELECT id, file_name, file_path FROM xml_files
             WHERE device_key = ?1
               AND status = 'waiting'
               AND created_at BETWEEN ?2 AND ?3
@@ -1596,7 +1616,8 @@ fn waiting_files(db: &AppDb, from_time: &str, to_time: &str) -> Result<Vec<WorkF
         .query_map(params![DEVICE_KEY, from_time, to_time], |row| {
             Ok(WorkFile {
                 id: row.get(0)?,
-                path: row.get(1)?,
+                file_name: row.get(1)?,
+                path: row.get(2)?,
             })
         })
         .map_err(|error| format!("Đọc queue XML thất bại: {error}"))?;
@@ -1608,7 +1629,7 @@ fn files_failed_in_scope(db: &AppDb, from_time: &str, to_time: &str) -> Result<u
     let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
     conn.query_row(r#"
         SELECT COUNT(*) FROM xml_files WHERE device_key=?1 AND created_at BETWEEN ?2 AND ?3
-          AND status IN ('xml_error','mapping_error','send_error','patient_not_found','treatment_ambiguous','service_not_found','pairing_error','failed')
+          AND status IN ('xml_error','mapping_error','send_error','patient_not_found','treatment_ambiguous','service_not_found','pairing_error','failed','invalid_filename')
     "#, params![DEVICE_KEY, from_time, to_time], |r| r.get::<_, i64>(0))
         .map(|n| n as usize).map_err(|e| format!("Đếm file lỗi: {e}"))
 }
