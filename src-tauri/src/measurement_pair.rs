@@ -35,7 +35,9 @@ pub fn generate_instance_id() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct MeasurementSnapshot {
     pub version: u32,
-    pub patient_id: String,
+    /// Optional XML metadata, retained only for audit/logging.
+    #[serde(default, alias = "patientId")]
+    pub xml_patient_id: Option<String>,
     pub patient_no: i64,
     pub measured_at: String,
     pub content_hash: String,
@@ -52,12 +54,12 @@ pub struct EyeSnapshot {
 }
 
 impl MeasurementSnapshot {
-    pub const VERSION: u32 = 1;
+    pub const VERSION: u32 = 2;
 
     pub fn from_parsed(parsed: &ParsedMeasurement, content_hash: &str) -> Self {
         Self {
             version: Self::VERSION,
-            patient_id: parsed.patient_id.clone(),
+            xml_patient_id: parsed.xml_patient_id.clone(),
             patient_no: parsed.patient_no,
             measured_at: format_measured_at(parsed.measured_at),
             content_hash: content_hash.to_string(),
@@ -156,11 +158,69 @@ pub fn normalize_patient_code(value: &str) -> String {
     value.trim().to_lowercase()
 }
 
-pub fn meta_from_parsed(file_id: i64, parsed: &ParsedMeasurement, content_hash: &str) -> MeasurementMeta {
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ReconcileResult { pub reconciled_files: usize, pub invalid_files: usize }
+
+/// Repair pending records created while XML `Patient.ID` was incorrectly used
+/// as the HIS code. This is transactional, idempotent, and leaves every
+/// successfully processed XML untouched.
+pub fn reconcile_pending_patient_codes(db: &AppDb) -> Result<ReconcileResult, String> {
+    let mut conn = lock_conn(db)?;
+    let tx = conn.transaction().map_err(|e| format!("Bắt đầu reconcile KR-800 thất bại: {e}"))?;
+    let rows = {
+        let mut stmt = tx.prepare("SELECT id, file_name, pair_id FROM xml_files WHERE device_key=?1 AND status NOT IN ('processed', 'invalid_filename')")
+            .map_err(|e| format!("Đọc file KR-800 cần reconcile thất bại: {e}"))?;
+        stmt.query_map(params![DEVICE_KEY], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<i64>>(2)?)))
+            .map_err(|e| format!("Query file KR-800 cần reconcile thất bại: {e}"))?
+            .collect::<Result<Vec<_>, _>>().map_err(|e| format!("Map file KR-800 cần reconcile thất bại: {e}"))?
+    };
+    let mut result = ReconcileResult::default();
+    let mut pair_ids = std::collections::BTreeSet::new();
+    for (id, name, pair_id) in &rows {
+        if let Some(pair_id) = pair_id { pair_ids.insert(*pair_id); }
+        match crate::xml_track::parse_kr800_filename(name) {
+            Ok(meta) => {
+                let patient_code_norm = normalize_patient_code(&meta.ma_ho_so);
+                let changed = tx.execute("UPDATE xml_files SET patient_code=?1, updated_at=datetime('now') WHERE id=?2 AND status <> 'processed' AND (patient_code IS NULL OR lower(trim(patient_code)) <> ?3)", params![meta.ma_ho_so, id, patient_code_norm])
+                    .map_err(|e| format!("Cập nhật mã hồ sơ KR-800 id={id} thất bại: {e}"))?;
+                result.reconciled_files += changed;
+            }
+            Err(error) => {
+                tx.execute("UPDATE xml_files SET status='invalid_filename', error_message=?1, updated_at=datetime('now') WHERE id=?2 AND status <> 'processed'", params![error, id])
+                    .map_err(|e| format!("Đánh dấu filename KR-800 không hợp lệ id={id}: {e}"))?;
+                result.invalid_files += 1;
+            }
+        }
+    }
+    for pair_id in pair_ids {
+        let members = {
+            let mut stmt = tx.prepare("SELECT file_name, status FROM xml_files WHERE pair_id=?1")
+                .map_err(|e| format!("Đọc pair KR-800 id={pair_id} thất bại: {e}"))?;
+            stmt.query_map(params![pair_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .map_err(|e| format!("Query pair KR-800 id={pair_id} thất bại: {e}"))?
+                .collect::<Result<Vec<_>, _>>().map_err(|e| format!("Map pair KR-800 id={pair_id} thất bại: {e}"))?
+        };
+        let codes: Result<Vec<String>, String> = members.iter().map(|(name, _)| crate::xml_track::parse_kr800_filename(name).map(|meta| meta.ma_ho_so)).collect();
+        let code = codes.ok().and_then(|codes| codes.first().and_then(|first| codes.iter().all(|code| normalize_patient_code(code) == normalize_patient_code(first)).then_some(first.clone())));
+        if let Some(code) = code {
+            let code_norm = normalize_patient_code(&code);
+            tx.execute("UPDATE measurement_pairs SET patient_code=?1, patient_code_norm=?2, updated_at=datetime('now') WHERE id=?3 AND status <> 'processed'", params![code, code_norm, pair_id])
+                .map_err(|e| format!("Cập nhật pair KR-800 id={pair_id} thất bại: {e}"))?;
+        } else {
+            let message = format!("Pair KR-800 có filename không hợp lệ hoặc mã hồ sơ không nhất quán; không gọi HIS (pair_id={pair_id}).");
+            tx.execute("UPDATE xml_files SET status='invalid_filename', error_message=?1, updated_at=datetime('now') WHERE pair_id=?2 AND status <> 'processed'", params![message, pair_id])
+                .map_err(|e| format!("Khoá pair filename không hợp lệ id={pair_id} thất bại: {e}"))?;
+        }
+    }
+    tx.commit().map_err(|e| format!("Commit reconcile KR-800 thất bại: {e}"))?;
+    Ok(result)
+}
+
+pub fn meta_from_parsed(file_id: i64, parsed: &ParsedMeasurement, content_hash: &str, patient_code: String) -> MeasurementMeta {
     MeasurementMeta {
         file_id,
-        patient_code: parsed.patient_id.clone(),
-        patient_code_norm: normalize_patient_code(&parsed.patient_id),
+        patient_code_norm: normalize_patient_code(&patient_code),
+        patient_code,
         patient_no: parsed.patient_no,
         measured_at: format_measured_at(parsed.measured_at),
         content_hash: content_hash.to_string(),
@@ -338,11 +398,14 @@ pub fn load_or_rehydrate_snapshot(
     })?;
     let measured_at = format_measured_at(parsed.measured_at);
     let mut mismatches = Vec::new();
-    if normalize_patient_code(&parsed.patient_id) != normalize_patient_code(&expected.patient_code)
-    {
+    let file_name = std::path::Path::new(&path).file_name().and_then(|name| name.to_str())
+        .ok_or_else(|| format!("Legacy rehydrate: path không có filename id={file_id}: {path}"))?;
+    let filename_meta = crate::xml_track::parse_kr800_filename(file_name)
+        .map_err(|error| format!("Legacy rehydrate: {error}"))?;
+    if normalize_patient_code(&filename_meta.ma_ho_so) != normalize_patient_code(&expected.patient_code) {
         mismatches.push(format!(
-            "Patient.ID DB={} file={}",
-            expected.patient_code, parsed.patient_id
+            "maHoSo filename DB={} file={}",
+            expected.patient_code, filename_meta.ma_ho_so
         ));
     }
     if parsed.patient_no != expected.patient_no {
@@ -366,8 +429,8 @@ pub fn load_or_rehydrate_snapshot(
 
     let meta = MeasurementMeta {
         file_id,
-        patient_code: parsed.patient_id.clone(),
-        patient_code_norm: normalize_patient_code(&parsed.patient_id),
+        patient_code: filename_meta.ma_ho_so.clone(),
+        patient_code_norm: normalize_patient_code(&filename_meta.ma_ho_so),
         patient_no: parsed.patient_no,
         measured_at,
         content_hash: hash,
@@ -388,12 +451,6 @@ fn verify_snapshot_matches_expected(
         mismatches.push(format!(
             "content_hash snap={} expected={}",
             snap.content_hash, expected.content_hash
-        ));
-    }
-    if normalize_patient_code(&snap.patient_id) != normalize_patient_code(&expected.patient_code) {
-        mismatches.push(format!(
-            "Patient.ID snap={} expected={}",
-            snap.patient_id, expected.patient_code
         ));
     }
     if snap.patient_no != expected.patient_no {
@@ -1940,7 +1997,7 @@ mod tests {
         let measured_at =
             NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S").expect("test datetime");
         ParsedMeasurement {
-            patient_id: code.into(),
+            xml_patient_id: Some(code.into()),
             patient_no: no,
             measured_at,
             right: ParsedEye {
@@ -2211,7 +2268,7 @@ mod tests {
         let m = meta(id, "HCMS", 1, "2026-07-15 10:00:00", "shash");
         save_meta(&db, &m);
         let snap = load_snapshot(&db, id).unwrap().expect("snapshot saved");
-        assert_eq!(snap.patient_id, "HCMS");
+        assert_eq!(snap.xml_patient_id.as_deref(), Some("HCMS"));
         assert_eq!(snap.right.sphere, 0.25);
         assert_eq!(snap.content_hash, "shash");
         // load_or_rehydrate dùng snapshot, không cần file disk.
@@ -2223,6 +2280,34 @@ mod tests {
         };
         let again = load_or_rehydrate_snapshot(&db, id, &exp).unwrap();
         assert_eq!(again.right.axis, 165);
+    }
+
+    #[test]
+    fn filename_patient_code_wins_over_xml_patient_id() {
+        let parsed = dummy_parsed("5548", 1, "2026-07-15 10:00:00");
+        let meta = meta_from_parsed(1, &parsed, "hash", "HCM2607150275".into());
+        assert_eq!(meta.patient_code, "HCM2607150275");
+        assert_eq!(meta.patient_code_norm, "hcm2607150275");
+        assert_eq!(parsed.xml_patient_id.as_deref(), Some("5548"));
+    }
+
+    #[test]
+    fn reconcile_repairs_retry_code_and_is_idempotent_without_touching_processed() {
+        let db = db::open_memory_for_test().unwrap();
+        let (pending, processed) = {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO xml_files (device_key,file_name,file_path,status,patient_code,created_at,updated_at) VALUES ('kr-800',?1,'/tmp/retry.xml','patient_not_found','5548',datetime('now'),datetime('now'))", params!["HCM2607150275_20260715_151240_TOPCON_KR-800_4780634.xml"]).unwrap();
+            let pending = conn.last_insert_rowid();
+            conn.execute("INSERT INTO xml_files (device_key,file_name,file_path,status,patient_code,created_at,updated_at) VALUES ('kr-800',?1,'/tmp/done.xml','processed','5548',datetime('now'),datetime('now'))", params!["HCM2607150999_20260715_151240_TOPCON_KR-800_4780634.xml"]).unwrap();
+            (pending, conn.last_insert_rowid())
+        };
+        assert_eq!(reconcile_pending_patient_codes(&db).unwrap().reconciled_files, 1);
+        assert_eq!(reconcile_pending_patient_codes(&db).unwrap().reconciled_files, 0);
+        let conn = db.conn.lock().unwrap();
+        let pending_code: String = conn.query_row("SELECT patient_code FROM xml_files WHERE id=?1", params![pending], |row| row.get(0)).unwrap();
+        let processed_code: String = conn.query_row("SELECT patient_code FROM xml_files WHERE id=?1", params![processed], |row| row.get(0)).unwrap();
+        assert_eq!(pending_code, "HCM2607150275");
+        assert_eq!(processed_code, "5548");
     }
 
     #[test]

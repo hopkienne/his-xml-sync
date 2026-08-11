@@ -33,7 +33,9 @@ pub struct ParsedEye {
 /// Kết quả đo REF đầy đủ từ một file KR-800 (cả hai mắt).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedMeasurement {
-    pub patient_id: String,
+    /// `Common.Patient.ID` is machine metadata only. KR-800 resolves the HIS
+    /// record code from the filename.
+    pub xml_patient_id: Option<String>,
     /// `nsCommon:Patient/nsCommon:No.` — dùng ghép thứ tự lần đo.
     pub patient_no: i64,
     /// Date + Time trong XML; nguồn chính để so sánh trước/sau.
@@ -53,7 +55,7 @@ pub fn preview_file(path: &str) -> Result<XmlPreview, String> {
         .to_string();
     Ok(XmlPreview {
         file_name,
-        patient_id: Some(parsed.patient_id),
+        patient_id: parsed.xml_patient_id,
         measured_at: Some(format_measured_at(parsed.measured_at)),
         right: eye_preview(&parsed.right),
         left: eye_preview(&parsed.left),
@@ -71,9 +73,9 @@ pub fn parse_measurement(bytes: &[u8]) -> Result<ParsedMeasurement, String> {
         .children()
         .find(|node| is_element(*node, "Patient"))
         .ok_or_else(|| "Không tìm thấy Common.Patient trong XML.".to_string())?;
-    let patient_id = child_text(patient, "ID")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Thiếu hoặc rỗng Common.Patient.ID trong XML.".to_string())?;
+    // This may be an internal machine ID and can be absent. It is diagnostic
+    // metadata, not the authoritative HIS patient identifier.
+    let xml_patient_id = child_text(patient, "ID").filter(|value| !value.is_empty());
 
     let patient_no_raw = child_text(patient, "No.")
         .filter(|value| !value.is_empty())
@@ -105,7 +107,7 @@ pub fn parse_measurement(bytes: &[u8]) -> Result<ParsedMeasurement, String> {
         .ok_or_else(|| "Không tìm thấy REF Measure/REF trong XML.".to_string())?;
 
     Ok(ParsedMeasurement {
-        patient_id,
+        xml_patient_id,
         patient_no,
         measured_at,
         right: parse_eye(ref_node, "R")?,
@@ -219,7 +221,7 @@ mod tests {
     #[test]
     fn parses_patient_id_no_measured_at_and_ref_medians() {
         let parsed = parse_measurement(sample_xml_measurement1()).expect("parse fixture");
-        assert_eq!(parsed.patient_id, "HCM2607150275");
+        assert_eq!(parsed.xml_patient_id.as_deref(), Some("HCM2607150275"));
         assert_eq!(parsed.patient_no, 1694);
         assert_eq!(
             format_measured_at(parsed.measured_at),
@@ -262,7 +264,7 @@ mod tests {
     fn parses_patient_and_ref_medians_legacy_shape() {
         let xml = br#"<?xml version="1.0"?><Ophthalmology xmlns:c="urn:c" xmlns:r="urn:r"><c:Common><c:Date>2026-07-07</c:Date><c:Time>14:50:00</c:Time><c:Patient><c:ID>HCM2607070269</c:ID><c:No.>100</c:No.></c:Patient></c:Common><r:Measure type="REF"><r:REF><r:R><r:Median><r:Sphere>+1.750</r:Sphere><r:Cylinder>-1.00</r:Cylinder><r:Axis>178.0</r:Axis></r:Median></r:R><r:L><r:Median><r:Sphere>0.75</r:Sphere><r:Cylinder>-0.25</r:Cylinder><r:Axis>35</r:Axis></r:Median></r:L></r:REF></r:Measure></Ophthalmology>"#;
         let parsed = parse_measurement(xml).expect("parse fixture");
-        assert_eq!(parsed.patient_id, "HCM2607070269");
+        assert_eq!(parsed.xml_patient_id.as_deref(), Some("HCM2607070269"));
         assert_eq!(parsed.patient_no, 100);
         assert_eq!(
             parsed.right,
@@ -280,5 +282,11 @@ mod tests {
                 axis: 35
             }
         );
+    }
+
+    #[test]
+    fn accepts_missing_patient_id_as_optional_metadata() {
+        let xml = br#"<?xml version="1.0"?><Ophthalmology xmlns:c="urn:c" xmlns:r="urn:r"><c:Common><c:Date>2026-07-15</c:Date><c:Time>15:12:40</c:Time><c:Patient><c:No.>1</c:No.></c:Patient></c:Common><r:Measure type="REF"><r:REF><r:R><r:Median><r:Sphere>0</r:Sphere><r:Cylinder>0</r:Cylinder><r:Axis>0</r:Axis></r:Median></r:R><r:L><r:Median><r:Sphere>0</r:Sphere><r:Cylinder>0</r:Cylinder><r:Axis>0</r:Axis></r:Median></r:L></r:REF></r:Measure></Ophthalmology>"#;
+        assert_eq!(parse_measurement(xml).unwrap().xml_patient_id, None);
     }
 }

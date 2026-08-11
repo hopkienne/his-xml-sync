@@ -1007,56 +1007,50 @@ fn scan_xml_files(
     Ok(files)
 }
 
-/// Parse `YYYYMMDD_HHMMSS` từ tên file KR-800.
-///
-/// Ví dụ: `HCM2607070269_20260707_145000_TOPCON_KR-800_4780634.xml`
-/// → `2026-07-07 14:50:00`
-pub fn parse_created_at_from_file_name(file_name: &str) -> Option<String> {
-    let stem = Path::new(file_name)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(file_name);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Kr800FilenameMeta {
+    pub ma_ho_so: String,
+    pub measured_at: String,
+    pub model: String,
+    pub machine_or_sequence: String,
+}
 
-    let parts: Vec<&str> = stem.split('_').collect();
-    for window in parts.windows(2) {
-        let date = window[0];
-        let time = window[1];
-        if date.len() != 8 || time.len() != 6 {
-            continue;
-        }
-        if !date.chars().all(|c| c.is_ascii_digit()) || !time.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
+const KR800_FILENAME_FORMAT: &str = "HCM..._YYYYMMDD_HHMMSS_TOPCON_KR-800_<machine-or-sequence>.xml";
 
-        let y: i32 = date[0..4].parse().ok()?;
-        let mo: u32 = date[4..6].parse().ok()?;
-        let d: u32 = date[6..8].parse().ok()?;
-        let hh: u32 = time[0..2].parse().ok()?;
-        let mm: u32 = time[2..4].parse().ok()?;
-        let ss: u32 = time[4..6].parse().ok()?;
-
-        if !(1..=12).contains(&mo)
-            || !(1..=31).contains(&d)
-            || hh > 23
-            || mm > 59
-            || ss > 59
-            || !(2000..=2100).contains(&y)
-        {
-            continue;
-        }
-
-        // Xác thực ngày hợp lệ (vd. không cho 2026-02-31).
-        if chrono::NaiveDate::from_ymd_opt(y, mo, d).is_none() {
-            continue;
-        }
-        if chrono::NaiveTime::from_hms_opt(hh, mm, ss).is_none() {
-            continue;
-        }
-
-        return Some(format!("{y:04}-{mo:02}-{d:02} {hh:02}:{mm:02}:{ss:02}"));
+/// Parse only a complete KR-800 filename (never a path) and return the
+/// authoritative HIS code encoded in it.
+pub fn parse_kr800_filename(file_name: &str) -> Result<Kr800FilenameMeta, String> {
+    if file_name.is_empty() || Path::new(file_name).file_name().and_then(|name| name.to_str()) != Some(file_name) {
+        return Err(format!("Tên file KR-800 không hợp lệ: {file_name:?}. Mong đợi {KR800_FILENAME_FORMAT}."));
     }
+    let (stem, extension) = file_name.rsplit_once('.').ok_or_else(|| format!("Tên file KR-800 không hợp lệ: {file_name}. Mong đợi {KR800_FILENAME_FORMAT}."))?;
+    if !extension.eq_ignore_ascii_case("xml") {
+        return Err(format!("Tên file KR-800 phải có đuôi .xml: {file_name}. Mong đợi {KR800_FILENAME_FORMAT}."));
+    }
+    let parts: Vec<&str> = stem.split('_').collect();
+    if parts.len() != 6 || !parts[3].eq_ignore_ascii_case("TOPCON") || !parts[4].eq_ignore_ascii_case("KR-800") || parts[5].is_empty() {
+        return Err(format!("Tên file KR-800 không hợp lệ: {file_name}. Mong đợi {KR800_FILENAME_FORMAT}."));
+    }
+    let raw_code = parts[0];
+    if raw_code.len() <= 3 || !raw_code[..3].eq_ignore_ascii_case("HCM") || !raw_code.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return Err(format!("Mã hồ sơ trong tên file KR-800 phải bắt đầu bằng HCM: {file_name}. Mong đợi {KR800_FILENAME_FORMAT}."));
+    }
+    if parts[1].len() != 8 || !parts[1].chars().all(|ch| ch.is_ascii_digit()) || parts[2].len() != 6 || !parts[2].chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(format!("Timestamp tên file KR-800 không hợp lệ: {file_name}. Mong đợi {KR800_FILENAME_FORMAT}."));
+    }
+    let measured_at = chrono::NaiveDateTime::parse_from_str(&format!("{}_{}", parts[1], parts[2]), "%Y%m%d_%H%M%S")
+        .map_err(|_| format!("Timestamp tên file KR-800 không hợp lệ: {file_name}. Mong đợi {KR800_FILENAME_FORMAT}."))?;
+    Ok(Kr800FilenameMeta {
+        ma_ho_so: format!("HCM{}", &raw_code[3..]),
+        measured_at: measured_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+        model: "KR-800".to_string(),
+        machine_or_sequence: parts[5].to_string(),
+    })
+}
 
-    None
+/// Parse `YYYYMMDD_HHMMSS` only from a complete valid KR-800 filename.
+pub fn parse_created_at_from_file_name(file_name: &str) -> Option<String> {
+    parse_kr800_filename(file_name).ok().map(|meta| meta.measured_at)
 }
 
 fn load_existing_files(
@@ -1266,7 +1260,7 @@ fn lock_conn(db: &AppDb) -> Result<MutexGuard<'_, Connection>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_created_at_from_file_name, should_skip_prune};
+    use super::{parse_created_at_from_file_name, parse_kr800_filename, should_skip_prune};
 
     #[test]
     fn parses_kr800_filename() {
@@ -1278,20 +1272,22 @@ mod tests {
     }
 
     #[test]
-    fn parses_without_extension() {
-        let name = "ABC_20260101_000000_TOPCON";
-        assert_eq!(
-            parse_created_at_from_file_name(name).as_deref(),
-            Some("2026-01-01 00:00:00")
-        );
+    fn canonicalizes_hcm_code_and_accepts_case_insensitive_markers() {
+        let parsed = parse_kr800_filename("hcm2607150275_20260715_151240_topcon_kr-800_4780634.XML").unwrap();
+        assert_eq!(parsed.ma_ho_so, "HCM2607150275");
+        assert_eq!(parsed.model, "KR-800");
     }
 
     #[test]
-    fn rejects_invalid_date() {
-        assert_eq!(
-            parse_created_at_from_file_name("X_20260231_120000_Y.xml"),
-            None
-        );
+    fn rejects_non_hcm_and_other_device_filenames() {
+        for name in [
+            "5548_20260715_151240_TOPCON_KR-800_4780634.xml",
+            "HCM2607150275_20260715_151240_TOPCON_CT-800_4780634.xml",
+            "HCM2607150275_20260715_151240_TOPCON_HDR-9000_4780634.xml",
+            "HCM2607150275_TOPCON_KR-800.xml",
+        ] {
+            assert!(parse_kr800_filename(name).is_err(), "{name}");
+        }
     }
 
     #[test]
