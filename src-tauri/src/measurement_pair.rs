@@ -170,9 +170,10 @@ pub fn reconcile_pending_patient_codes(db: &AppDb) -> Result<ReconcileResult, St
     let rows = {
         let mut stmt = tx.prepare("SELECT id, file_name, pair_id FROM xml_files WHERE device_key=?1 AND status NOT IN ('processed', 'invalid_filename')")
             .map_err(|e| format!("Đọc file KR-800 cần reconcile thất bại: {e}"))?;
-        stmt.query_map(params![DEVICE_KEY], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<i64>>(2)?)))
+        let rows = stmt.query_map(params![DEVICE_KEY], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<i64>>(2)?)))
             .map_err(|e| format!("Query file KR-800 cần reconcile thất bại: {e}"))?
-            .collect::<Result<Vec<_>, _>>().map_err(|e| format!("Map file KR-800 cần reconcile thất bại: {e}"))?
+            .collect::<Result<Vec<_>, _>>().map_err(|e| format!("Map file KR-800 cần reconcile thất bại: {e}"))?;
+        rows
     };
     let mut result = ReconcileResult::default();
     let mut pair_ids = std::collections::BTreeSet::new();
@@ -196,9 +197,10 @@ pub fn reconcile_pending_patient_codes(db: &AppDb) -> Result<ReconcileResult, St
         let members = {
             let mut stmt = tx.prepare("SELECT file_name, status FROM xml_files WHERE pair_id=?1")
                 .map_err(|e| format!("Đọc pair KR-800 id={pair_id} thất bại: {e}"))?;
-            stmt.query_map(params![pair_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            let rows = stmt.query_map(params![pair_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
                 .map_err(|e| format!("Query pair KR-800 id={pair_id} thất bại: {e}"))?
-                .collect::<Result<Vec<_>, _>>().map_err(|e| format!("Map pair KR-800 id={pair_id} thất bại: {e}"))?
+                .collect::<Result<Vec<_>, _>>().map_err(|e| format!("Map pair KR-800 id={pair_id} thất bại: {e}"))?;
+            rows
         };
         let codes: Result<Vec<String>, String> = members.iter().map(|(name, _)| crate::xml_track::parse_kr800_filename(name).map(|meta| meta.ma_ho_so)).collect();
         let code = codes.ok().and_then(|codes| codes.first().and_then(|first| codes.iter().all(|code| normalize_patient_code(code) == normalize_patient_code(first)).then_some(first.clone())));
