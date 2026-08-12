@@ -68,12 +68,19 @@ jobs:
           }
 
           $cargoPath = 'src-tauri/Cargo.toml'
-          $cargo = Get-Content -Raw $cargoPath
-          $updatedCargo = [regex]::Replace($cargo, '(?m)^version = "[^"]+"$', "version = `"$version`"", 1)
-          if ($updatedCargo -eq $cargo) {
+          $cargoLines = [string[]](Get-Content $cargoPath)
+          $rootVersionLine = -1
+          for ($index = 0; $index -lt $cargoLines.Count; $index++) {
+            if ($cargoLines[$index] -match '^version = "[^"]+"$') {
+              $rootVersionLine = $index
+              break
+            }
+          }
+          if ($rootVersionLine -lt 0) {
             throw "Could not update the root package version in $cargoPath."
           }
-          Set-Content -NoNewline -Encoding utf8 $cargoPath $updatedCargo
+          $cargoLines[$rootVersionLine] = "version = `"$version`""
+          Set-Content -Encoding utf8 $cargoPath $cargoLines
 
           Write-Host "Building HIS XML Sync v$version"
 
