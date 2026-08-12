@@ -906,8 +906,8 @@ async fn resolve_service_id(db: &AppDb, state: &Hdr9000ProcessState, client: &Cl
     let patients: Value = serde_json::from_str(&patient_body).map_err(|e| format!("patient_not_found: Response người bệnh không hợp lệ: {e}"))?;
     let nb_id = patients.pointer("/data").and_then(Value::as_array).and_then(|rows| rows.iter().find(|row| row.get("maHoSo").and_then(Value::as_str).map(|value| value.trim().eq_ignore_ascii_case(ma_ho_so)).unwrap_or(false)))
         .and_then(|row| row.get("nbDotDieuTriId")).and_then(Value::as_i64).ok_or_else(|| "patient_not_found: Không tìm thấy hồ sơ hoặc đợt điều trị.".to_string())?;
-    let summary_url = his_api::join_url(&settings.his_api_url, SUMMARY_PATH);
-    let summary_response = client.get(&summary_url).bearer_auth(&auth).query(&[("nbThongTinId", nb_id.to_string()), ("page", "0".into()), ("size", "500".into()), ("active", "true".into()), ("dsCoSoKcbId", settings.ds_co_so_kcb_id.to_string())]).send().await
+    let summary_url = format!("{}/{}", his_api::join_url(&settings.his_api_url, SUMMARY_PATH), nb_id);
+    let summary_response = client.get(&summary_url).bearer_auth(&auth).query(&[("dsCoSoKcbId", settings.ds_co_so_kcb_id.to_string())]).send().await
         .map_err(|e| format!("send_error: Gọi tổng hợp đợt điều trị thất bại: {e}"))?;
     let body = read_success_body(summary_response, "API tổng hợp đợt điều trị").await?;
     let summary: Value = serde_json::from_str(&body).map_err(|e| format!("service_not_found: Response tổng hợp không hợp lệ: {e}"))?;

@@ -22,7 +22,7 @@ import type {
 
 export const fallbackSettings: AppSettings = {
   hisApiUrl: "",
-  dsCoSoKcbId: 4,
+  dsCoSoKcbId: 1,
   copyRefractionToNewGlasses: false,
   username: "",
   password: "",
@@ -149,7 +149,7 @@ export function defaultPatientQueryParams(): PatientQueryParam[] {
     { key: "tuThoiGianVaoVien", value: "", enabled: true },
     { key: "denThoiGianVaoVien", value: "", enabled: true },
     { key: "theoPhongKham", value: "false", enabled: true },
-    { key: "dsCoSoKcbId", value: "4", enabled: true },
+    { key: "dsCoSoKcbId", value: "1", enabled: true },
   ];
 }
 

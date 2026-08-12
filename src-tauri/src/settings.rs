@@ -41,7 +41,7 @@ impl Default for AppSettings {
 }
 
 fn default_ds_co_so_kcb_id() -> i64 {
-    4
+    1
 }
 
 /// MD5 hex (lowercase) — HIS login API expects `matKhau` as MD5 of plain password.
@@ -164,7 +164,12 @@ fn lock_conn(db: &AppDb) -> Result<MutexGuard<'_, Connection>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::md5_hex;
+    use super::{md5_hex, AppSettings};
+
+    #[test]
+    fn default_facility_id_is_one() {
+        assert_eq!(AppSettings::default().ds_co_so_kcb_id, 1);
+    }
 
     #[test]
     fn md5_hex_matches_known_vector() {

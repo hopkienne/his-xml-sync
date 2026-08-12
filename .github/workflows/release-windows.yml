@@ -3,7 +3,7 @@
 #
 # Triggers:
 #   - Push tag v* (e.g. v0.1.0) → create draft release + attach setup.exe
-#   - workflow_dispatch → same (useful for test builds)
+#   - workflow_dispatch → nhập version để build và tạo draft release
 #
 # Required repo secret:
 #   HIS_XML_LICENSE_PUBLIC_KEY — Ed25519 public key (base64url) embedded at compile time
@@ -15,6 +15,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Phiên bản SemVer để build, ví dụ 1.2.3"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -44,6 +49,33 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Apply manual release version
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          $version = $env:RELEASE_VERSION.Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+            throw "Version must be SemVer without a leading v, for example 1.2.3."
+          }
+
+          foreach ($path in @('package.json', 'src-tauri/tauri.conf.json')) {
+            $manifest = Get-Content -Raw $path | ConvertFrom-Json
+            $manifest.version = $version
+            $manifest | ConvertTo-Json -Depth 100 | Set-Content -NoNewline -Encoding utf8 $path
+          }
+
+          $cargoPath = 'src-tauri/Cargo.toml'
+          $cargo = Get-Content -Raw $cargoPath
+          $updatedCargo = [regex]::Replace($cargo, '(?m)^version = "[^"]+"$', "version = `"$version`"", 1)
+          if ($updatedCargo -eq $cargo) {
+            throw "Could not update the root package version in $cargoPath."
+          }
+          Set-Content -NoNewline -Encoding utf8 $cargoPath $updatedCargo
+
+          Write-Host "Building HIS XML Sync v$version"
 
       - name: Require production license public key
         shell: bash

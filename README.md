@@ -60,9 +60,11 @@ GitHub repo → **Settings → Secrets and variables → Actions → New reposit
 
 > Private key **không** commit, **không** đưa vào Actions secrets dùng build app.
 
-### 2. Đồng bộ version
+### 2. Chọn version release
 
-Trước mỗi release, cập nhật cùng version semver ở:
+Khi chạy tay, chọn **Actions → Release Windows → Run workflow**, rồi nhập `version` theo SemVer, không kèm tiền tố `v` (ví dụ `1.2.3` hoặc `1.2.3-rc.1`). Pipeline tự đồng bộ version này vào app trước khi build; tên installer và draft GitHub Release cũng dùng đúng version đã nhập.
+
+Khi phát hành bằng tag, vẫn cập nhật cùng version semver trong source trước:
 
 - `package.json` → `version`
 - `src-tauri/tauri.conf.json` → `version`
@@ -78,7 +80,7 @@ git push origin main
 git push origin v0.1.0
 ```
 
-Hoặc chạy tay: **Actions → Release Windows → Run workflow**.
+Hoặc chạy tay theo bước 2, không cần commit thay đổi version chỉ để tạo bản build đó.
 
 ### 4. Lấy file cài đặt
 

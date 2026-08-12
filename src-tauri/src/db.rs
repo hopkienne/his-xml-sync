@@ -50,7 +50,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS app_config (
           id              INTEGER PRIMARY KEY CHECK (id = 1),
           his_api_url     TEXT    NOT NULL DEFAULT '',
-          ds_co_so_kcb_id INTEGER NOT NULL DEFAULT 4,
+          ds_co_so_kcb_id INTEGER NOT NULL DEFAULT 1,
           copy_refraction_to_new_glasses INTEGER NOT NULL DEFAULT 0,
           username        TEXT    NOT NULL DEFAULT '',
           password        TEXT    NOT NULL DEFAULT '',
@@ -455,7 +455,7 @@ fn migrate_app_config_remove_viet_nga_url(conn: &Connection) -> Result<(), Strin
             CREATE TABLE app_config_migrated (
               id              INTEGER PRIMARY KEY CHECK (id = 1),
               his_api_url     TEXT    NOT NULL DEFAULT '',
-              ds_co_so_kcb_id INTEGER NOT NULL DEFAULT 4,
+              ds_co_so_kcb_id INTEGER NOT NULL DEFAULT 1,
               copy_refraction_to_new_glasses INTEGER NOT NULL DEFAULT 0,
               username        TEXT    NOT NULL DEFAULT '',
               password        TEXT    NOT NULL DEFAULT '',
@@ -473,7 +473,7 @@ fn migrate_app_config_remove_viet_nga_url(conn: &Connection) -> Result<(), Strin
                 WHEN trim(his_api_url) <> '' THEN his_api_url
                 ELSE viet_nga_url
               END,
-              4,
+              1,
               0,
               username,
               password,
@@ -500,7 +500,7 @@ fn migrate_app_config_add_ds_co_so_kcb_id(conn: &Connection) -> Result<(), Strin
     }
 
     conn.execute_batch(
-        "ALTER TABLE app_config ADD COLUMN ds_co_so_kcb_id INTEGER NOT NULL DEFAULT 4;",
+        "ALTER TABLE app_config ADD COLUMN ds_co_so_kcb_id INTEGER NOT NULL DEFAULT 1;",
     )
     .map_err(|error| format!("Thêm ds_co_so_kcb_id vào app_config thất bại: {error}"))
 }
@@ -952,7 +952,7 @@ mod tests {
             .expect("read migrated app_config");
 
         assert_eq!(saved.0, "https://legacy.example");
-        assert_eq!(saved.1, 4);
+        assert_eq!(saved.1, 1);
         assert!(!saved.2);
         assert_eq!(saved.3, "doctor");
         assert_eq!(saved.4, "secret");
@@ -993,7 +993,7 @@ mod tests {
             )
             .expect("read default facility id");
 
-        assert_eq!(facility_id, 4);
+        assert_eq!(facility_id, 1);
     }
 
     #[test]
