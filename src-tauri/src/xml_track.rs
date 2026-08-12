@@ -314,7 +314,7 @@ pub fn default_patient_query_params() -> Vec<PatientQueryParam> {
         },
         PatientQueryParam {
             key: "dsCoSoKcbId".into(),
-            value: "4".into(),
+            value: "1".into(),
             enabled: true,
         },
     ]

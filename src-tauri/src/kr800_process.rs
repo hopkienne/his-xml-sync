@@ -167,7 +167,7 @@ struct TreatmentSummaryData { ds_dv_kham: Vec<ServiceVisit> }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ServiceVisit { id: i64, nb_dot_dieu_tri_id: Option<i64> }
+struct ServiceVisit { id: i64 }
 
 struct WorkFile {
     id: i64,
@@ -1175,7 +1175,12 @@ async fn patient_index(
     to_time: &str,
 ) -> Result<Arc<PatientIndex>, String> {
     let stored_params = xml_track::get_patient_query_params(db, DEVICE_KEY)?;
-    let query = build_patient_query(&stored_params, from_time, to_time);
+    let query = build_patient_query(
+        &stored_params,
+        from_time,
+        to_time,
+        settings.ds_co_so_kcb_id,
+    );
     let key = PatientCacheKey {
         from_time: from_time.to_string(),
         to_time: to_time.to_string(),
@@ -1277,10 +1282,15 @@ fn build_patient_query(
     params: &[xml_track::PatientQueryParam],
     from_time: &str,
     to_time: &str,
+    ds_co_so_kcb_id: i64,
 ) -> Vec<(String, String)> {
-    params
+    let mut query = params
         .iter()
-        .filter(|item| item.enabled && !item.key.trim().is_empty())
+        .filter(|item| {
+            item.enabled
+                && !item.key.trim().is_empty()
+                && item.key.trim() != "dsCoSoKcbId"
+        })
         .map(|item| {
             let key = item.key.trim().to_string();
             let value = match key.as_str() {
@@ -1290,7 +1300,9 @@ fn build_patient_query(
             };
             (key, value)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    query.push(("dsCoSoKcbId".into(), ds_co_so_kcb_id.to_string()));
+    query
 }
 
 fn patient_query_fingerprint(query: &[(String, String)]) -> String {
@@ -1326,18 +1338,13 @@ fn measurement_query_range_for_measurement(measured_at: &str) -> Result<(String,
     ))
 }
 
-/// Deserialize the HIS wrapper at the boundary.  The service must belong to
-/// the same treatment queried; a mismatched response is unsafe to PUT.
-fn parse_service_visit_id(body: &str, expected_nb_id: i64) -> Result<i64, String> {
+/// Deserialize the HIS wrapper at the boundary and return the first service ID.
+fn parse_service_visit_id(body: &str) -> Result<i64, String> {
     let envelope: TreatmentSummaryEnvelope = serde_json::from_str(body)
         .map_err(|e| format!("Response dịch vụ khám không hợp lệ: {e}"))?;
     let service = envelope.data.ds_dv_kham.into_iter().next()
         .ok_or_else(|| "service_not_found: Không tìm thấy dịch vụ khám (dsDvKham rỗng).".to_string())?;
-    match service.nb_dot_dieu_tri_id {
-        Some(id) if id == expected_nb_id => Ok(service.id),
-        Some(id) => Err(format!("service_not_found: Dữ liệu dịch vụ không nhất quán: nbDotDieuTriId={id}, expected={expected_nb_id}.")),
-        None => Err("service_not_found: Dịch vụ khám thiếu nbDotDieuTriId.".into()),
-    }
+    Ok(service.id)
 }
 
 async fn resolve_service_visit_id(
@@ -1349,12 +1356,8 @@ async fn resolve_service_visit_id(
     pair_id: i64,
     file_id: i64,
 ) -> Result<i64, String> {
-    let url = his_api::join_url(&settings.his_api_url, TREATMENT_SUMMARY_PATH);
-    let query = [
-        ("nbThongTinId", nb_id.to_string()), ("page", "0".into()),
-        ("sort", "thoiGianVaoVien,desc".into()), ("size", "500".into()),
-        ("active", "true".into()), ("dsCoSoKcbId", settings.ds_co_so_kcb_id.to_string()),
-    ];
+    let url = format!("{}/{}", his_api::join_url(&settings.his_api_url, TREATMENT_SUMMARY_PATH), nb_id);
+    let query = [("dsCoSoKcbId", settings.ds_co_so_kcb_id.to_string())];
     let mut token = ensure_token(db, state).await?;
     let mut retried_auth = false;
     loop {
@@ -1367,7 +1370,7 @@ async fn resolve_service_visit_id(
         let body = response.text().await.map_err(|e| format!("Đọc response dịch vụ khám thất bại: {e}"))?;
         let log = format!("pair_id={pair_id} file_id={file_id} nb_dot_dieu_tri_id={nb_id} endpoint={url} api=tong-hop response_status={status} response_body={}", response_log_body(&body));
         if status.is_success() { app_logger::info("kr800", &log); } else { app_logger::error("kr800", &log); }
-        if status.is_success() { return parse_service_visit_id(&body, nb_id); }
+        if status.is_success() { return parse_service_visit_id(&body); }
         if status == StatusCode::UNAUTHORIZED && !retried_auth {
             retried_auth = true;
             token = refresh_token(db, state, &token).await?;
@@ -1841,11 +1844,38 @@ mod tests {
     }
 
     #[test]
-    fn parses_first_service_and_rejects_missing_or_mismatched_treatment() {
-        let body = r#"{"data":{"dsDvKham":[{"id":3462,"nbDotDieuTriId":1103}]}}"#;
-        assert_eq!(parse_service_visit_id(body, 1103).unwrap(), 3462);
-        assert!(parse_service_visit_id(r#"{"data":{"dsDvKham":[]}}"#, 1103).unwrap_err().contains("service_not_found"));
-        assert!(parse_service_visit_id(r#"{"data":{"dsDvKham":[{"id":3462,"nbDotDieuTriId":99}]}}"#, 1103).unwrap_err().contains("không nhất quán"));
+    fn parses_first_service_from_the_per_treatment_response() {
+        let body = r#"{"data":{"dsDvKham":[{"id":292415,"nbDotDieuTriId":40822}]}}"#;
+        assert_eq!(parse_service_visit_id(body).unwrap(), 292415);
+        assert!(parse_service_visit_id(r#"{"data":{"dsDvKham":[]}}"#)
+            .unwrap_err()
+            .contains("service_not_found"));
+    }
+
+    #[test]
+    fn patient_query_uses_the_configured_facility_id() {
+        let params = vec![
+            xml_track::PatientQueryParam {
+                key: "page".into(),
+                value: "0".into(),
+                enabled: true,
+            },
+            xml_track::PatientQueryParam {
+                key: "dsCoSoKcbId".into(),
+                value: "4".into(),
+                enabled: false,
+            },
+        ];
+        let query = build_patient_query(
+            &params,
+            "2026-08-12 00:00:00",
+            "2026-08-12 23:59:59",
+            1,
+        );
+        assert_eq!(
+            query.iter().find(|(key, _)| key == "dsCoSoKcbId"),
+            Some(&("dsCoSoKcbId".into(), "1".into()))
+        );
     }
 
     #[test]

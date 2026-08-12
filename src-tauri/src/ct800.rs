@@ -1530,17 +1530,13 @@ async fn resolve_service(
         .and_then(|x| x.get("nbDotDieuTriId"))
         .and_then(Value::as_i64)
         .ok_or_else(|| "patient_not_found: Không tìm thấy hồ sơ hoặc đợt điều trị.".to_string())?;
-    let summary_url = his_api::join_url(&settings.his_api_url, SUMMARY_PATH);
+    let summary_url = format!("{}/{}", his_api::join_url(&settings.his_api_url, SUMMARY_PATH), nb);
     let summary = get_json_with_retry(
         db,
         state,
         "API tổng hợp đợt điều trị",
         |access_token| {
             client.get(&summary_url).bearer_auth(access_token).query(&[
-                ("nbThongTinId", nb.to_string()),
-                ("page", "0".into()),
-                ("size", "500".into()),
-                ("active", "true".into()),
                 ("dsCoSoKcbId", settings.ds_co_so_kcb_id.to_string()),
             ])
         },
