@@ -2,6 +2,7 @@ use crate::app_logger;
 use crate::db::AppDb;
 use crate::his_api;
 use crate::measurement_pair::{self, OrderedPair, PairResolve};
+use crate::refraction_catalog;
 use crate::settings::{self, AppSettings};
 use crate::xml_parser::{self, ParsedEye};
 use crate::xml_track::{self, TrackedXmlFile};
@@ -11,7 +12,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
@@ -114,19 +115,6 @@ struct PatientEnvelope {
 struct PatientRow {
     ma_ho_so: String,
     nb_dot_dieu_tri_id: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CatalogEntry {
-    id: i64,
-    name: String,
-    kind: String,
-}
-
-struct Catalog {
-    sph: HashMap<i32, i64>,
-    cyl: HashMap<i32, i64>,
-    axis: HashMap<i64, i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1504,90 +1492,19 @@ async fn refresh_token(
     his_api::get_access_token(db)?.ok_or_else(|| "Login lại nhưng không có access_token.".into())
 }
 
-fn catalog() -> Result<&'static Catalog, String> {
-    static CATALOG: OnceLock<Catalog> = OnceLock::new();
-    if let Some(catalog) = CATALOG.get() {
-        return Ok(catalog);
-    }
-    let entries: Vec<CatalogEntry> =
-        serde_json::from_str(include_str!("../resources/dm_thi_luc.json"))
-            .map_err(|error| format!("Danh mục thị lực không hợp lệ: {error}"))?;
-    let mut parsed = Catalog {
-        sph: HashMap::new(),
-        cyl: HashMap::new(),
-        axis: HashMap::new(),
-    };
-    for entry in entries {
-        match entry.kind.as_str() {
-            "SPH" => {
-                if let Ok(value) = decimal_key(&entry.name) {
-                    insert_unique(&mut parsed.sph, value, entry.id, "SPH")?;
-                }
-            }
-            "CYL" => {
-                if let Ok(value) = decimal_key(&entry.name) {
-                    insert_unique(&mut parsed.cyl, value, entry.id, "CYL")?;
-                }
-            }
-            "Axis" => {
-                if let Ok(axis) = entry.name.parse::<i64>() {
-                    insert_unique(&mut parsed.axis, axis, entry.id, "Axis")?;
-                }
-            }
-            _ => {}
-        }
-    }
-    let _ = CATALOG.set(parsed);
-    CATALOG
-        .get()
-        .ok_or_else(|| "Không khởi tạo được danh mục thị lực.".into())
+fn catalog() -> Result<&'static refraction_catalog::Catalog, String> {
+    refraction_catalog::catalog()
 }
 
-fn decimal_key(value: &str) -> Result<i32, String> {
-    let parsed = value
-        .trim()
-        .parse::<f64>()
-        .map_err(|_| format!("Giá trị danh mục không phải số: {value}"))?;
-    Ok((parsed * 100.0).round() as i32)
-}
-
-fn insert_unique<K: std::hash::Hash + Eq + Copy + std::fmt::Display>(
-    map: &mut HashMap<K, i64>,
-    key: K,
-    id: i64,
-    kind: &str,
-) -> Result<(), String> {
-    if let Some(existing) = map.insert(key, id) {
-        return Err(format!(
-            "Danh mục {kind} trùng giá trị {key}: ID {existing} và {id}"
-        ));
-    }
-    Ok(())
-}
-
-fn map_eye(catalog: &Catalog, eye: &ParsedEye) -> Result<EyePayload, String> {
-    let sph_key = (eye.sphere * 100.0).round() as i32;
-    let cyl_key = (eye.cylinder * 100.0).round() as i32;
+fn map_eye(catalog: &refraction_catalog::Catalog, eye: &ParsedEye) -> Result<EyePayload, String> {
     Ok(EyePayload {
-        sph_id: *catalog
-            .sph
-            .get(&sph_key)
-            .ok_or_else(|| format!("Không tìm thấy danh mục SPH cho giá trị {:.2}", eye.sphere))?,
-        cyl_id: *catalog.cyl.get(&cyl_key).ok_or_else(|| {
-            format!(
-                "Không tìm thấy danh mục CYL cho giá trị {:.2}",
-                eye.cylinder
-            )
-        })?,
-        ax_id: *catalog
-            .axis
-            .get(&eye.axis)
-            .ok_or_else(|| format!("Không tìm thấy danh mục Axis cho giá trị {}", eye.axis))?,
+        sph_id: refraction_catalog::sph_id(catalog, eye.sphere)?,
+        cyl_id: refraction_catalog::cyl_id(catalog, eye.cylinder)?,
+        ax_id: refraction_catalog::axis_id(catalog, eye.axis as f64)?,
         don_vi_add_id: None,
         thi_luc_id: None,
     })
 }
-
 fn validate_range(from_time: &str, to_time: &str) -> Result<(), String> {
     let from = chrono::NaiveDateTime::parse_from_str(from_time, "%Y-%m-%d %H:%M:%S")
         .map_err(|_| "Thời gian bắt đầu không hợp lệ.".to_string())?;
@@ -1735,7 +1652,7 @@ mod tests {
     #[test]
     fn maps_sample_refraction_fixture_ids() {
         let catalog = catalog().expect("load catalog");
-        // Fixture nghiệp vụ: SPH +0.25→53, CYL -1.00→176, AX 165→378
+        // Danh mục HCM: SPH +0.25→1067, CYL -1.00→1336, AX 165→1699.
         assert_eq!(
             map_eye(
                 catalog,
@@ -1747,9 +1664,9 @@ mod tests {
             )
             .expect("map right m1"),
             EyePayload {
-                sph_id: 53,
-                cyl_id: 176,
-                ax_id: 378,
+                sph_id: 1067,
+                cyl_id: 1336,
+                ax_id: 1699,
                 don_vi_add_id: None,
                 thi_luc_id: None,
             }
@@ -1765,9 +1682,9 @@ mod tests {
             )
             .expect("map left m1"),
             EyePayload {
-                sph_id: 57,
-                cyl_id: 179,
-                ax_id: 389,
+                sph_id: 1071,
+                cyl_id: 1339,
+                ax_id: 1710,
                 don_vi_add_id: None,
                 thi_luc_id: None,
             }
@@ -1818,12 +1735,12 @@ mod tests {
         assert!(json.get("matPhaiKinhMoi").is_none());
         assert!(json.get("matTraiKinhMoi").is_none());
 
-        assert_eq!(json["matPhaiKinhSauLietDieuTiet"]["sphId"], 53);
-        assert_eq!(json["matPhaiKinhSauLietDieuTiet"]["cylId"], 176);
-        assert_eq!(json["matPhaiKinhSauLietDieuTiet"]["axId"], 378);
-        assert_eq!(json["matTraiKinhSauLietDieuTiet"]["sphId"], 57);
-        assert_eq!(json["matTraiKinhSauLietDieuTiet"]["cylId"], 179);
-        assert_eq!(json["matTraiKinhSauLietDieuTiet"]["axId"], 389);
+        assert_eq!(json["matPhaiKinhSauLietDieuTiet"]["sphId"], 1067);
+        assert_eq!(json["matPhaiKinhSauLietDieuTiet"]["cylId"], 1336);
+        assert_eq!(json["matPhaiKinhSauLietDieuTiet"]["axId"], 1699);
+        assert_eq!(json["matTraiKinhSauLietDieuTiet"]["sphId"], 1071);
+        assert_eq!(json["matTraiKinhSauLietDieuTiet"]["cylId"], 1339);
+        assert_eq!(json["matTraiKinhSauLietDieuTiet"]["axId"], 1710);
     }
 
     #[test]
@@ -1916,7 +1833,7 @@ mod tests {
             )
             .expect("map right")
             .sph_id,
-            59
+            1073
         );
     }
 
