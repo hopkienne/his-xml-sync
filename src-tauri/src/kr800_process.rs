@@ -2,7 +2,7 @@ use crate::app_logger;
 use crate::db::AppDb;
 use crate::his_api;
 use crate::measurement_pair::{self, OrderedPair, PairResolve};
-use crate::refraction_catalog;
+use crate::refraction_catalog::{self, Catalog};
 use crate::settings::{self, AppSettings};
 use crate::xml_parser::{self, ParsedEye};
 use crate::xml_track::{self, TrackedXmlFile};
