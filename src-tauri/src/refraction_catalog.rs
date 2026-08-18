@@ -1,3 +1,4 @@
+use crate::app_logger;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -54,9 +55,9 @@ pub fn catalog() -> Result<&'static Catalog, String> {
 
     for entry in entries {
         match entry.kind.as_str() {
-            "SPH" => insert_numeric(&mut parsed.sph, &entry.name, entry.id, "SPH")?,
-            "CYL" => insert_numeric(&mut parsed.cyl, &entry.name, entry.id, "CYL")?,
-            "Axis" => insert_numeric(&mut parsed.axis, &entry.name, entry.id, "Axis")?,
+            "SPH" => insert_numeric_or_warn(&mut parsed.sph, &entry.name, entry.id, "SPH"),
+            "CYL" => insert_numeric_or_warn(&mut parsed.cyl, &entry.name, entry.id, "CYL"),
+            "Axis" => insert_numeric_or_warn(&mut parsed.axis, &entry.name, entry.id, "Axis"),
             // Thị lực giữ nguyên chuỗi trong cột `ten`: không quy đổi 20/200 thành 0.1.
             "Thị lực" => insert(&mut parsed.visual_acuity, text_key(&entry.name), entry.id),
             _ => {}
@@ -109,6 +110,14 @@ fn insert_numeric(table: &mut LookupTable, value: &str, id: i64, kind: &str) -> 
         .map_err(|_| format!("Danh mục {kind} có giá trị không phải số: {value}"))?;
     insert(table, key, id);
     Ok(())
+}
+
+/// Các giá trị đặc biệt như SPH `Plano` hoặc CYL `HK` không thuộc bảng tra số.
+/// Chúng không được phép làm lỗi toàn bộ mapping của file XML khác.
+fn insert_numeric_or_warn(table: &mut LookupTable, value: &str, id: i64, kind: &str) {
+    if let Err(error) = insert_numeric(table, value, id, kind) {
+        app_logger::warn("refraction_catalog", &format!("Bỏ qua {error} (id={id})."));
+    }
 }
 
 fn insert(table: &mut LookupTable, key: String, id: i64) {
@@ -185,6 +194,15 @@ mod tests {
         assert_eq!(sph_id_from_text(catalog, "+2.50").unwrap(), 1076);
         assert_eq!(cyl_id_from_text(catalog, "-0.75").unwrap(), 1335);
         assert_eq!(cyl_id_from_text(catalog, "+0.75").unwrap(), 1295);
+    }
+
+    #[test]
+    fn non_numeric_sphere_and_cylinder_do_not_block_numeric_mapping() {
+        let catalog = catalog().unwrap();
+        assert_eq!(sph_id_from_text(catalog, "-2.50").unwrap(), 1100);
+        assert_eq!(cyl_id_from_text(catalog, "-0.75").unwrap(), 1335);
+        assert!(sph_id_from_text(catalog, "Plano").is_err());
+        assert!(cyl_id_from_text(catalog, "HK").is_err());
     }
 
     #[test]

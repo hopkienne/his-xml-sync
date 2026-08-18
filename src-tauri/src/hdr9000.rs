@@ -406,7 +406,7 @@ pub fn folder_state(db: &AppDb) -> Result<DeviceFolderState, String> {
 
 pub fn count_pending(db: &AppDb) -> Result<usize, String> {
     let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
-    conn.query_row("SELECT COUNT(*) FROM hdr9000_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found')", params![DEVICE_KEY], |row| row.get::<_, i64>(0))
+    conn.query_row("SELECT COUNT(*) FROM hdr9000_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found','mapping_error')", params![DEVICE_KEY], |row| row.get::<_, i64>(0))
         .map(|value| value as usize).map_err(|e| e.to_string())
 }
 
@@ -688,7 +688,7 @@ async fn process_locked(app: &AppHandle, db: &AppDb, state: &Hdr9000ProcessState
 
 fn pending_range(db: &AppDb) -> Result<Option<(String, String)>, String> {
     db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?
-        .query_row("SELECT MIN(filter_date), MAX(filter_date) FROM hdr9000_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found')", params![DEVICE_KEY],
+        .query_row("SELECT MIN(filter_date), MAX(filter_date) FROM hdr9000_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found','mapping_error')", params![DEVICE_KEY],
             |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)))
         .map(|(from, to)| from.zip(to)).map_err(|e| e.to_string())
 }
@@ -789,14 +789,14 @@ fn load_revision(db: &AppDb, id: i64) -> Result<Option<Revision>, String> {
 
 fn retryable_ids(db: &AppDb, from: &str, to: &str) -> Result<Vec<i64>, String> {
     let conn = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?;
-    let mut statement = conn.prepare("SELECT id FROM hdr9000_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found') AND filter_date BETWEEN ?2 AND ?3 ORDER BY source_time,id").map_err(|e| e.to_string())?;
+    let mut statement = conn.prepare("SELECT id FROM hdr9000_revisions WHERE device_key=?1 AND status IN ('waiting','send_error','patient_not_found','service_not_found','mapping_error') AND filter_date BETWEEN ?2 AND ?3 ORDER BY source_time,id").map_err(|e| e.to_string())?;
     let ids = statement.query_map(params![DEVICE_KEY, from, to], |row| row.get(0)).map_err(|e| e.to_string())?.collect::<Result<Vec<i64>, _>>().map_err(|e| e.to_string());
     ids
 }
 
 fn claim(db: &AppDb, id: i64, owner: &str) -> Result<bool, String> {
     let changed = db.conn.lock().map_err(|_| "Không khóa được SQLite.".to_string())?.execute(
-        "UPDATE hdr9000_revisions SET status='processing',error_message=NULL,sending_started_at=datetime('now'),sending_owner_id=?1,sending_lease_until=datetime('now','+120 seconds'),updated_at=datetime('now') WHERE id=?2 AND device_key=?3 AND status IN ('waiting','send_error','patient_not_found','service_not_found')",
+        "UPDATE hdr9000_revisions SET status='processing',error_message=NULL,sending_started_at=datetime('now'),sending_owner_id=?1,sending_lease_until=datetime('now','+120 seconds'),updated_at=datetime('now') WHERE id=?2 AND device_key=?3 AND status IN ('waiting','send_error','patient_not_found','service_not_found','mapping_error')",
         params![owner, id, DEVICE_KEY]).map_err(|e| e.to_string())?;
     Ok(changed == 1)
 }
