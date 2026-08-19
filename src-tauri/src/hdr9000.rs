@@ -177,8 +177,8 @@ fn sparse_payload(document: &Document<'_>) -> Value {
 }
 
 
-/// Snapshot HDR-9000 giữ chuỗi XML thô. Trước khi gửi mới tra ID để retry luôn
-/// dùng danh mục hiện hành và thị lực như `20/200` không bị quy đổi.
+/// Snapshot HDR-9000 giữ chuỗi XML thô. Trước khi gửi mới tra ID/mã để retry luôn
+/// dùng danh mục hiện hành và thị lực không bị quy đổi.
 fn mapped_payload(raw: &Value) -> Result<Value, String> {
     let catalog = refraction_catalog::catalog()?;
     let root = raw.as_object().ok_or_else(|| "Payload HDR-9000 không phải object.".to_string())?;
@@ -191,15 +191,15 @@ fn mapped_payload(raw: &Value) -> Result<Value, String> {
         let mut mapped_fields = Map::new();
         for (field, value) in fields {
             let raw_value = value.as_str().ok_or_else(|| format!("Giá trị {object_key}.{field} không phải chuỗi XML."))?;
-            let id = match field.as_str() {
-                "sphId" => refraction_catalog::sph_id_from_text(catalog, raw_value)?,
-                "cylId" => refraction_catalog::cyl_id_from_text(catalog, raw_value)?,
-                "axId" => refraction_catalog::axis_id_from_text(catalog, raw_value)?,
+            let mapped_value = match field.as_str() {
+                "sphId" => Value::from(refraction_catalog::sph_id_from_text(catalog, raw_value)?),
+                "cylId" => Value::from(refraction_catalog::cyl_id_from_text(catalog, raw_value)?),
+                "axId" => Value::from(refraction_catalog::axis_id_from_text(catalog, raw_value)?),
                 "thiLucId" => refraction_catalog::visual_acuity_id(catalog, raw_value)?,
-                "donViAddId" => refraction_catalog::add_id(catalog, raw_value)?,
+                "donViAddId" => Value::from(refraction_catalog::add_id(catalog, raw_value)?),
                 _ => return Err(format!("Trường HDR-9000 chưa có quy tắc mapping: {object_key}.{field}")),
             };
-            mapped_fields.insert(field.clone(), Value::from(id));
+            mapped_fields.insert(field.clone(), mapped_value);
         }
         mapped_root.insert(object_key.clone(), Value::Object(mapped_fields));
     }
@@ -1014,9 +1014,9 @@ mod tests {
 
     #[test]
     fn visual_acuity_keeps_the_exact_xml_text() {
-        let xml = b"<x><Product_Model>HDR-9000</Product_Model><Final_Prescription_Data_FAR_VA-Right>20/200</Final_Prescription_Data_FAR_VA-Right><Final_Prescription_Data_FAR_VA-Left>1/10</Final_Prescription_Data_FAR_VA-Left><Final_Prescription_Data_NEAR_VA-Right>ST(+)</Final_Prescription_Data_NEAR_VA-Right></x>";
+        let xml = b"<x><Product_Model>HDR-9000</Product_Model><Final_Prescription_Data_FAR_VA-Right>5</Final_Prescription_Data_FAR_VA-Right><Final_Prescription_Data_FAR_VA-Left>20/200</Final_Prescription_Data_FAR_VA-Left><Final_Prescription_Data_NEAR_VA-Right>100</Final_Prescription_Data_NEAR_VA-Right></x>";
         let parsed = parse_hdr9000_xml(xml, "0188.xml").unwrap();
-        assert_eq!(mapped_payload(&parsed.payload).unwrap(), serde_json::json!({"matPhaiKinhMoi":{"thiLucId":852},"matTraiKinhMoi":{"thiLucId":1902},"matPhaiCapKinhNhinGan":{"thiLucId":893}}));
+        assert_eq!(mapped_payload(&parsed.payload).unwrap(), serde_json::json!({"matPhaiKinhMoi":{"thiLucId":"TL058"},"matTraiKinhMoi":{"thiLucId":852},"matPhaiCapKinhNhinGan":{"thiLucId":"TL068"}}));
     }
 
     #[test]

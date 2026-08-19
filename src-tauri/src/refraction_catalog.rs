@@ -1,11 +1,14 @@
 use crate::app_logger;
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 #[derive(Debug, Deserialize)]
 struct CatalogEntry {
     id: i64,
+    #[serde(default)]
+    code: Option<String>,
     name: String,
     kind: String,
 }
@@ -23,12 +26,19 @@ enum Lookup {
 }
 
 type LookupTable = HashMap<String, Lookup>;
+type TextLookupTable = HashMap<String, VisualAcuityLookup>;
+
+#[derive(Debug, Clone)]
+enum VisualAcuityLookup {
+    Value(Value),
+    Ambiguous(Vec<Value>),
+}
 
 pub struct Catalog {
     sph: LookupTable,
     cyl: LookupTable,
     axis: LookupTable,
-    visual_acuity: LookupTable,
+    visual_acuity: TextLookupTable,
     add: LookupTable,
 }
 
@@ -49,7 +59,7 @@ pub fn catalog() -> Result<&'static Catalog, String> {
         sph: LookupTable::new(),
         cyl: LookupTable::new(),
         axis: LookupTable::new(),
-        visual_acuity: LookupTable::new(),
+        visual_acuity: TextLookupTable::new(),
         add: LookupTable::new(),
     };
 
@@ -58,8 +68,13 @@ pub fn catalog() -> Result<&'static Catalog, String> {
             "SPH" => insert_numeric_or_warn(&mut parsed.sph, &entry.name, entry.id, "SPH"),
             "CYL" => insert_numeric_or_warn(&mut parsed.cyl, &entry.name, entry.id, "CYL"),
             "Axis" => insert_numeric_or_warn(&mut parsed.axis, &entry.name, entry.id, "Axis"),
-            // Thị lực giữ nguyên chuỗi trong cột `ten`: không quy đổi 20/200 thành 0.1.
-            "Thị lực" => insert(&mut parsed.visual_acuity, text_key(&entry.name), entry.id),
+            // Thị lực giữ nguyên chuỗi trong cột `ten`. Mục cũ gửi ID số;
+            // mục bổ sung có `code` gửi nguyên mã danh mục lên HIS.
+            "Thị lực" => insert_text(
+                &mut parsed.visual_acuity,
+                text_key(&entry.name),
+                entry.code.map(Value::from).unwrap_or_else(|| Value::from(entry.id)),
+            )?,
             _ => {}
         }
     }
@@ -101,8 +116,15 @@ pub fn axis_id_from_text(catalog: &Catalog, value: &str) -> Result<i64, String> 
     lookup_numeric_text(&catalog.axis, value, "Axis")
 }
 
-pub fn visual_acuity_id(catalog: &Catalog, value: &str) -> Result<i64, String> {
-    lookup(&catalog.visual_acuity, &text_key(value), "Thị lực", value)
+pub fn visual_acuity_id(catalog: &Catalog, value: &str) -> Result<Value, String> {
+    match catalog.visual_acuity.get(&text_key(value)) {
+        Some(VisualAcuityLookup::Value(id)) => Ok(id.clone()),
+        Some(VisualAcuityLookup::Ambiguous(ids)) => Err(format!(
+            "Danh mục Thị lực trùng giá trị {value}: các mã {}",
+            ids.iter().map(Value::to_string).collect::<Vec<_>>().join(", ")
+        )),
+        None => Err(format!("Không tìm thấy danh mục Thị lực cho giá trị {value}")),
+    }
 }
 
 fn insert_numeric(table: &mut LookupTable, value: &str, id: i64, kind: &str) -> Result<(), String> {
@@ -133,6 +155,22 @@ fn insert(table: &mut LookupTable, key: String, id: i64) {
     } else {
         table.insert(key, Lookup::Id(id));
     }
+}
+
+fn insert_text(table: &mut TextLookupTable, key: String, value: Value) -> Result<(), String> {
+    if let Some(existing) = table.get_mut(&key) {
+        match existing {
+            VisualAcuityLookup::Value(previous) if *previous != value => {
+                let prior_value = previous.clone();
+                *existing = VisualAcuityLookup::Ambiguous(vec![prior_value, value]);
+            }
+            VisualAcuityLookup::Ambiguous(values) if !values.contains(&value) => values.push(value),
+            _ => {}
+        }
+    } else {
+        table.insert(key, VisualAcuityLookup::Value(value));
+    }
+    Ok(())
 }
 
 fn lookup_numeric(table: &LookupTable, value: f64, kind: &str) -> Result<i64, String> {
@@ -208,6 +246,8 @@ mod tests {
     #[test]
     fn visual_acuity_uses_the_exact_catalogue_name() {
         let catalog = catalog().unwrap();
+        assert_eq!(visual_acuity_id(catalog, "5").unwrap(), "TL058");
+        assert_eq!(visual_acuity_id(catalog, "100").unwrap(), "TL068");
         assert_eq!(visual_acuity_id(catalog, "20/200").unwrap(), 852);
         assert_eq!(visual_acuity_id(catalog, "1/10").unwrap(), 1902);
         assert_eq!(visual_acuity_id(catalog, "ĐNT 0.1m").unwrap(), 887);

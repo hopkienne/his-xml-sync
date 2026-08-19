@@ -1,5 +1,95 @@
 [
   {
+    "id": 58,
+    "code": "TL058",
+    "name": "5",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 59,
+    "code": "TL059",
+    "name": "10",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 60,
+    "code": "TL060",
+    "name": "15",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 61,
+    "code": "TL061",
+    "name": "20",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 62,
+    "code": "TL062",
+    "name": "30",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 63,
+    "code": "TL063",
+    "name": "40",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 64,
+    "code": "TL064",
+    "name": "50",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 65,
+    "code": "TL065",
+    "name": "60",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 66,
+    "code": "TL066",
+    "name": "70",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 67,
+    "code": "TL067",
+    "name": "80",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 68,
+    "code": "TL068",
+    "name": "100",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 69,
+    "code": "TL069",
+    "name": "150",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 70,
+    "code": "TL070",
+    "name": "200",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 71,
+    "code": "TL071",
+    "name": "400",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 72,
+    "code": "TL072",
+    "name": "600",
+    "kind": "Thị lực"
+  },
+  {
     "id": 852,
     "name": "20/200",
     "kind": "Thị lực"
@@ -232,6 +322,66 @@
   {
     "id": 898,
     "name": "2.0",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1752,
+    "name": "1.0",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1852,
+    "name": "20/800",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1902,
+    "name": "1/10",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1903,
+    "name": "2/10",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1904,
+    "name": "3/10",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1905,
+    "name": "4/10",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1906,
+    "name": "5/10",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1907,
+    "name": "6/10",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1908,
+    "name": "7/10",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1909,
+    "name": "8/10",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1910,
+    "name": "9/10",
+    "kind": "Thị lực"
+  },
+  {
+    "id": 1911,
+    "name": "10/10",
     "kind": "Thị lực"
   },
   {
@@ -3555,69 +3705,8 @@
     "kind": "Axis"
   },
   {
-    "id": 1752,
-    "name": "1.0",
-    "kind": "Thị lực"
-  },
-  {
-    "id": 1852,
-    "name": "20/800",
-    "kind": "Thị lực"
-  },
-  {
     "id": 1853,
     "name": "+6.75",
     "kind": "SPH"
-  },
-  {
-    "id": 1902,
-    "name": "1/10",
-    "kind": "Thị lực"
-  },
-  {
-    "id": 1903,
-    "name": "2/10",
-    "kind": "Thị lực"
-  },
-  {
-    "id": 1904,
-    "name": "3/10",
-    "kind": "Thị lực"
-  },
-  {
-    "id": 1905,
-    "name": "4/10",
-    "kind": "Thị lực"
-  },
-  {
-    "id": 1906,
-    "name": "5/10",
-    "kind": "Thị lực"
-  },
-  {
-    "id": 1907,
-    "name": "6/10",
-    "kind": "Thị lực"
-  },
-  {
-    "id": 1908,
-    "name": "7/10",
-    "kind": "Thị lực"
-  },
-  {
-    "id": 1909,
-    "name": "8/10",
-    "kind": "Thị lực"
-  },
-  {
-    "id": 1910,
-    "name": "9/10",
-    "kind": "Thị lực"
-  },
-  {
-    "id": 1911,
-    "name": "10/10",
-    "kind": "Thị lực"
   }
 ]
-
