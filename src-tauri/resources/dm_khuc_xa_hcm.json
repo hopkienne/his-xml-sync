@@ -1,91 +1,76 @@
 [
   {
-    "id": 58,
-    "code": "TL058",
+    "id": 1952,
     "name": "5",
     "kind": "Thị lực"
   },
   {
-    "id": 59,
-    "code": "TL059",
+    "id": 1953,
     "name": "10",
     "kind": "Thị lực"
   },
   {
-    "id": 60,
-    "code": "TL060",
+    "id": 1954,
     "name": "15",
     "kind": "Thị lực"
   },
   {
-    "id": 61,
-    "code": "TL061",
+    "id": 1955,
     "name": "20",
     "kind": "Thị lực"
   },
   {
-    "id": 62,
-    "code": "TL062",
+    "id": 1956,
     "name": "30",
     "kind": "Thị lực"
   },
   {
-    "id": 63,
-    "code": "TL063",
+    "id": 1957,
     "name": "40",
     "kind": "Thị lực"
   },
   {
-    "id": 64,
-    "code": "TL064",
+    "id": 1958,
     "name": "50",
     "kind": "Thị lực"
   },
   {
-    "id": 65,
-    "code": "TL065",
+    "id": 1959,
     "name": "60",
     "kind": "Thị lực"
   },
   {
-    "id": 66,
-    "code": "TL066",
+    "id": 1960,
     "name": "70",
     "kind": "Thị lực"
   },
   {
-    "id": 67,
-    "code": "TL067",
+    "id": 1961,
     "name": "80",
     "kind": "Thị lực"
   },
   {
-    "id": 68,
-    "code": "TL068",
+    "id": 1962,
     "name": "100",
     "kind": "Thị lực"
   },
   {
-    "id": 69,
-    "code": "TL069",
+    "id": 1963,
     "name": "150",
     "kind": "Thị lực"
   },
   {
-    "id": 70,
-    "code": "TL070",
+    "id": 1964,
     "name": "200",
     "kind": "Thị lực"
   },
   {
-    "id": 71,
-    "code": "TL071",
+    "id": 1965,
     "name": "400",
     "kind": "Thị lực"
   },
   {
-    "id": 72,
-    "code": "TL072",
+    "id": 1966,
     "name": "600",
     "kind": "Thị lực"
   },
