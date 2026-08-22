@@ -184,6 +184,10 @@ fn mapped_payload(raw: &Value) -> Result<Value, String> {
     let root = raw.as_object().ok_or_else(|| "Payload HDR-9000 không phải object.".to_string())?;
     let mut mapped_root = Map::new();
     for (object_key, object_value) in root {
+        // Đồng tử không thuộc payload HIS cho HDR-9000.
+        if matches!(object_key.as_str(), "dongTuXa" | "dongTuGan") {
+            continue;
+        }
         let Some(fields) = object_value.as_object() else {
             mapped_root.insert(object_key.clone(), object_value.clone());
             continue;
@@ -1009,7 +1013,7 @@ mod tests {
         let parsed = parse_hdr9000_xml(SAMPLE.as_bytes(), "0188.xml").unwrap();
         assert_eq!(parsed.ma_ho_so, "0188");
         assert_eq!(parsed.payload, serde_json::json!({"matPhaiKinhMoi":{"sphId":"-2.50","cylId":"-0.75","axId":"6"},"matTraiKinhMoi":{"sphId":"-2.25","cylId":"-0.50","axId":"19"},"dongTuXa":"61.0","dongTuGan":"57.5"}));
-        assert_eq!(mapped_payload(&parsed.payload).unwrap(), serde_json::json!({"matPhaiKinhMoi":{"sphId":1100,"cylId":1335,"axId":1540},"matTraiKinhMoi":{"sphId":1099,"cylId":1334,"axId":1553},"dongTuXa":"61.0","dongTuGan":"57.5"}));
+        assert_eq!(mapped_payload(&parsed.payload).unwrap(), serde_json::json!({"matPhaiKinhMoi":{"sphId":1100,"cylId":1335,"axId":1540},"matTraiKinhMoi":{"sphId":1099,"cylId":1334,"axId":1553}}));
     }
 
     #[test]
@@ -1031,7 +1035,7 @@ mod tests {
         let xml = b"<x><Product_Model>HDR-9000</Product_Model><Final_Prescription_Data_FAR_ADD-Right>1.50</Final_Prescription_Data_FAR_ADD-Right><Near_PD_OU>58.0</Near_PD_OU></x>";
         let parsed = parse_hdr9000_xml(xml, "0188.xml").unwrap();
         assert_eq!(parsed.payload, serde_json::json!({"matPhaiCapKinhNhinGan":{"donViAddId":"1.50"},"dongTuGan":"58.0"}));
-        assert_eq!(mapped_payload(&parsed.payload).unwrap(), serde_json::json!({"matPhaiCapKinhNhinGan":{"donViAddId":6},"dongTuGan":"58.0"}));
+        assert_eq!(mapped_payload(&parsed.payload).unwrap(), serde_json::json!({"matPhaiCapKinhNhinGan":{"donViAddId":6}}));
         assert!(parsed.payload.get("matPhaiKinhMoi").is_none());
         assert!(!parsed.payload.to_string().contains("null"));
     }
